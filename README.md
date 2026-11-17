@@ -1,4 +1,4 @@
-# CTE-GNRE — Emissor de Guias (GNRE e portais estaduais)
+# GNRE — Emissor de Guias (GNRE e portais estaduais)
 
 Programa desktop que lê o XML do CT-e autorizado, monta e emite a guia
 GNRE 2.00 pelo webservice oficial (mTLS com certificado A1), entrega o PDF
