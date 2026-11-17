@@ -1,0 +1,40 @@
+# Segredos e dados do contribuinte - nunca versionar
+ESKIMO.pfx
+*.pfx
+config.json
+guias_emitidas.json
+emissor.log
+*.log
+ui_state.json
+cache/
+guias/
+portal/
+
+# XMLs de CT-e de clientes e respostas de teste
+CTe*.xml
+configuf_*.xml
+
+# Builds e artefatos
+build/
+dist/
+instalador/build/
+instalador/dist/
+_antigo/
+*.spec.bak
+
+# Cópias antigas e provas locais
+CORRETO/
+bk/
+_sp_probe*.png
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Ferramentas locais
+.qoder/
+.env

@@ -1,0 +1,6 @@
+"""Identidade e versão do aplicativo."""
+
+NOME = "Emissor de Guias - TRANSREIS"
+VERSAO = "3.1.0"
+DESCRICAO = "GNRE e portais estaduais (SP, ES e PR) a partir do CT-e autorizado"
+EMPRESA = "TRANSREIS TRANSPORTE LTDA"
