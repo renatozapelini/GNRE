@@ -313,6 +313,7 @@ class AppGNRE:
         self._montar_tela()
         self._carregar_contexto()
         self.root.after(120, self._processar_fila)
+        self.root.after(5000, self._checagem_inicial)
         self.root.protocol("WM_DELETE_WINDOW", self._fechar)
 
     # ------------------------------------------------------------------
@@ -945,6 +946,24 @@ class AppGNRE:
     # ------------------------------------------------------------------
     # atualização interna pelo GitHub
     # ------------------------------------------------------------------
+
+    def _checagem_inicial(self) -> None:
+        # No código-fonte não há troca automática; a checagem é só do .exe.
+        if not getattr(sys, "frozen", False):
+            return
+        from atualizador import ErroAtualizacao, comparar_versoes, consultar_ultima
+
+        def tarefa() -> None:
+            try:
+                info = consultar_ultima()
+            except ErroAtualizacao:
+                return
+            except Exception:
+                return
+            if comparar_versoes(info.versao, VERSAO) > 0:
+                self.fila.put(("atualizacao_disponivel", info))
+
+        threading.Thread(target=tarefa, daemon=True).start()
 
     def _verificar_atualizacao(self) -> None:
         from atualizador import ErroAtualizacao, consultar_ultima
@@ -1925,6 +1944,12 @@ class AppGNRE:
                 elif tipo == "pdf_preparado":
                     self._pdf_preparado(*dado)
                 elif tipo == "atualizacao_consulta":
+                    self._avaliar_atualizacao(dado)
+                elif tipo == "atualizacao_disponivel":
+                    self.var_status.set(f"Nova versão v{dado.versao} disponível.")
+                    self._log(
+                        f"Atualização: versão v{dado.versao} publicada no GitHub."
+                    )
                     self._avaliar_atualizacao(dado)
                 elif tipo == "atualizacao_progresso":
                     self.var_status.set(f"Baixando a atualização: {dado}%")
