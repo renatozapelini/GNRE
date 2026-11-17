@@ -1003,7 +1003,7 @@ class AppGNRE:
             texto += f"\n\n{notas}"
         texto += (
             "\n\nBaixar e instalar agora?\n"
-            "O programa fecha, troca o executável e reabre sozinho. "
+            "O programa fecha, aplica a atualização e reabre sozinho. "
             "A configuração em Documentos\\ConfGNRE é mantida."
         )
         self._log(f"Atualização: v{info.versao} disponível (instalada v{VERSAO}).")

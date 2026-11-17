@@ -96,10 +96,14 @@ def consultar_ultima() -> Atualizacao:
     instalador = None
     programa = None
     for asset in assets:
-        nome = str(asset.get("name") or "").strip().lower()
-        if nome == NOME_INSTALADOR.lower():
+        # O GitHub troca espaços por pontos no nome do ativo; comparamos a forma
+        # normalizada para reconhecer "Instalar GNRE.exe" e "GNRE.exe".
+        chave = re.sub(r"[^a-z0-9]", "", str(asset.get("name") or "").lower())
+        if chave.endswith("exe"):
+            chave = chave[:-3]
+        if chave == "instalargnre":
             instalador = asset
-        elif nome == NOME_ASSET.lower():
+        elif chave == "gnre":
             programa = asset
     # O instalador traz o programa inteiro (exe + bibliotecas + dados), por isso
     # é preferido: a troca só do .exe funciona, mas não leva arquivos novos.
@@ -117,7 +121,8 @@ def consultar_ultima() -> Atualizacao:
     tipo = "instalador" if escolhido is instalador else "exe"
 
     tamanho = int(escolhido.get("size") or 0)
-    if tamanho and tamanho < 20 * 1024 * 1024:
+    minimo = 40 * 1024 * 1024 if tipo == "instalador" else 8 * 1024 * 1024
+    if tamanho and tamanho < minimo:
         raise ErroAtualizacao(
             f"O arquivo {escolhido.get('name')} da release {tag} parece incompleto."
         )
@@ -158,7 +163,8 @@ def baixar(
                 recebido += len(bloco)
                 if progresso is not None and total:
                     progresso(recebido, total)
-        if recebido < 20 * 1024 * 1024:
+        minimo = 40 * 1024 * 1024 if atualizacao.tipo == "instalador" else 8 * 1024 * 1024
+        if recebido < minimo:
             raise ErroAtualizacao(
                 f"O download terminou com {recebido} bytes, menor que um executável válido."
             )
