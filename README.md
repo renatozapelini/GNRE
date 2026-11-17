@@ -5,6 +5,22 @@ GNRE 2.00 pelo webservice oficial (mTLS com certificado A1), entrega o PDF
 de pagamento e, quando a UF não usa o GNRE, aciona os portais estaduais
 (SP, ES e PR).
 
+## Entrada do CT-e
+
+O cartão **CT-e autorizado** tem duas abas:
+
+- **XML** — seleciona o arquivo autorizado do computador.
+- **Chave do CT-e** — informe a chave de 44 dígitos e clique em **Adicionar**.
+  O programa consulta a Distribuição DF-e do CT-e com o certificado A1,
+  baixa o XML autorizado, confere cancelamento e já preenche os dados da guia.
+  Várias chaves podem ser adicionadas para gerar o lote (mesma UF).
+
+Os XMLs baixados ficam em `Documentos\ConfGNRE\xmls`, junto do ponto de
+parada da consulta. A consulta usa a janela mais recente da distribuição
+(por causa do limite de requisições da SEFAZ); para CT-es mais antigos,
+use a aba **XML**. Se a SEFAZ limitar as consultas (consumo indevido), o
+programa avisa e reaproveita os XMLs já baixados.
+
 ## Instalação
 
 1. Baixe `Instalar GNRE.exe` na última [release](../../releases/latest).
@@ -42,6 +58,7 @@ presente, atualiza somente o executável.
 
 - `app.py` — interface e fluxo de emissão
 - `gnre_api.py` — cliente SOAP/mTLS do GNRE 2.00, regras por UF e PDF oficial
+- `consulta_cte.py` — distribuição DF-e do CT-e (busca o XML pela chave)
 - `leitor_cte.py` — leitura e validação do XML do CT-e
 - `validacao_pdf.py` — conferência do PDF contra o retorno oficial
 - `atualizador.py` — verificação e instalação de novas versões pelo GitHub

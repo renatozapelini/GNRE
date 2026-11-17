@@ -135,6 +135,7 @@ class ConfigGNRE:
     cache_horas: int = 24
     schemas_dir: Path | None = None
     indice_guias: Path | None = None
+    uf_autor: str = "42"
 
 
 def _senha_certificado(bruto: dict, tolerar_ausencia: bool = False) -> str:
@@ -233,6 +234,7 @@ def carregar_config(
             if bruto.get("indice_guias", "guias_emitidas.json")
             else None
         ),
+        uf_autor=str(bruto.get("uf_autor", "42")),
     )
 
 

@@ -21,6 +21,7 @@ from ttkbootstrap.style import ThemeDefinition
 
 from calendario import vencimento_padrao
 from certificado import carregar_certificado
+from consulta_cte import DistribuicaoCTe
 from gnre_api import (
     ClienteGNRE,
     ConfigGNRE,
@@ -33,7 +34,7 @@ from gnre_api import (
     resolver_contribuinte,
     salvar_certificado_config,
 )
-from leitor_cte import DadosCTe, ler_cte_xml
+from leitor_cte import DadosCTe, ler_cte_xml, validar_chave
 from versao import NOME, VERSAO
 
 try:
@@ -301,8 +302,18 @@ class AppGNRE:
         self._lote_info: tuple[int, int] | None = None
         self._lateral_aberta = False
         self._portal_visivel = False
+        self.modo_entrada = "xml"
+        self.chaves: list[dict] = []
+        self.xml_dir = DADOS_DIR / "xmls"
+        self._ultima_distribuicao = 0.0
+        self._fila_chaves: queue.Queue = queue.Queue()
+        self._worker_chaves = threading.Thread(
+            target=self._baixar_chaves, daemon=True
+        )
+        self._worker_chaves.start()
 
         self.var_arquivo = tk.StringVar()
+        self.var_chave = tk.StringVar()
         self.var_modo = tk.StringVar(value="unica")
         self.var_uf = tk.StringVar()
         self.var_vencimento = tk.StringVar(value=vencimento_padrao().strftime("%d/%m/%Y"))
@@ -360,10 +371,35 @@ class AppGNRE:
         ).pack(anchor="w", pady=(1, 0))
 
         cartao_cte = self._cartao(
-            moldura, "CT-e autorizado", "XML autorizado do transporte"
+            moldura, "CT-e autorizado", "selecione o XML ou informe a chave"
         )
+        linha_abas = Quadro(cartao_cte, bg=CARTAO)
+        linha_abas.pack(fill="x", pady=(0, 5))
+        self.btn_aba_xml = ttk.Button(
+            linha_abas,
+            text="XML",
+            style="AbaAtiva.TButton",
+            command=lambda: self._trocar_aba("xml"),
+        )
+        self.btn_aba_xml.pack(side="left")
+        self.btn_aba_chave = ttk.Button(
+            linha_abas,
+            text="Chave do CT-e",
+            style="Aba.TButton",
+            command=lambda: self._trocar_aba("chave"),
+        )
+        self.btn_aba_chave.pack(side="left", padx=(4, 0))
+        self.legenda_aba = Rotulo(
+            linha_abas,
+            text="Selecione o XML autorizado.",
+            bg=CARTAO,
+            fg=TEXTO_SUAVE,
+            font=(self.fonte, 8),
+        )
+        self.legenda_aba.pack(side="right")
+
         linha_modo = Quadro(cartao_cte, bg=CARTAO)
-        linha_modo.pack(fill="x", pady=(0, 7))
+        linha_modo.pack(fill="x", pady=(0, 5))
         ttk.Label(linha_modo, text="Modo:", style="Legenda.TLabel").pack(
             side="left", padx=(0, 8)
         )
@@ -382,7 +418,9 @@ class AppGNRE:
             bootstyle="primary",
         ).pack(side="left", padx=(14, 0))
 
-        linha_cte = Quadro(cartao_cte, bg=CARTAO)
+        self.painel_xml = Quadro(cartao_cte, bg=CARTAO)
+        self.painel_xml.pack(fill="x")
+        linha_cte = Quadro(self.painel_xml, bg=CARTAO)
         linha_cte.pack(fill="x")
         self.entrada_arquivo = ttkb.Entry(
             linha_cte, textvariable=self.var_arquivo, style="Campo.TEntry"
@@ -401,6 +439,55 @@ class AppGNRE:
             bootstyle="secondary",
             command=self._ler_cte,
         ).pack(side="left", padx=(8, 0))
+
+        self.painel_chave = Quadro(cartao_cte, bg=CARTAO)
+        linha_chave = Quadro(self.painel_chave, bg=CARTAO)
+        linha_chave.pack(fill="x")
+        self.entrada_chave = ttkb.Entry(
+            linha_chave, textvariable=self.var_chave, style="Campo.TEntry"
+        )
+        self.entrada_chave.pack(side="left", fill="x", expand=True)
+        self.entrada_chave.bind("<Return>", lambda _evento: self._adicionar_chave())
+        ttkb.Button(
+            linha_chave,
+            text="Adicionar",
+            bootstyle="secondary",
+            command=self._adicionar_chave,
+        ).pack(side="left", padx=(8, 0))
+        ttkb.Button(
+            linha_chave,
+            text="Remover",
+            bootstyle="secondary",
+            command=self._remover_chave,
+        ).pack(side="left", padx=(4, 0))
+        ttkb.Button(
+            linha_chave,
+            text="Limpar",
+            bootstyle="secondary",
+            command=self._limpar_chaves,
+        ).pack(side="left", padx=(4, 0))
+
+        caixa_lista = Quadro(self.painel_chave, bg=CARTAO)
+        caixa_lista.pack(fill="x", pady=(5, 0))
+        self.lista_chaves = ttk.Treeview(
+            caixa_lista,
+            columns=("chave", "situacao"),
+            show="",
+            height=2,
+            selectmode="browse",
+            style="Chaves.Treeview",
+        )
+        self.lista_chaves.column("chave", width=350, anchor="w")
+        self.lista_chaves.column("situacao", width=190, anchor="w", stretch=True)
+        barra_lista = ttk.Scrollbar(
+            caixa_lista, orient="vertical", command=self.lista_chaves.yview
+        )
+        self.lista_chaves.configure(yscrollcommand=barra_lista.set)
+        self.lista_chaves.pack(side="left", fill="x", expand=True)
+        barra_lista.pack(side="left", fill="y")
+        self.lista_chaves.tag_configure("pendente", foreground=ALERTA)
+        self.lista_chaves.tag_configure("pronto", foreground=SUCESSO)
+        self.lista_chaves.tag_configure("erro", foreground=PERIGO)
 
         cartao_dados = self._cartao(
             moldura, "Dados da guia", "confira antes de emitir"
@@ -563,9 +650,9 @@ class AppGNRE:
         escala = float(self.root.tk.call("tk", "scaling")) / 1.3349
         area_x, area_y, area_largura, area_altura = self._area_util()
         largura = min(int(800 * escala), area_largura - 40)
-        altura = min(int(560 * escala), area_altura - 40)
+        altura = min(int(690 * escala), area_altura - 40)
         largura_minima = min(int(748 * escala), largura)
-        altura_minima = min(int(510 * escala), altura)
+        altura_minima = min(int(650 * escala), altura)
         self.root.minsize(largura_minima, altura_minima)
         x = area_x + max(0, (area_largura - largura) // 2)
         y = area_y + max(0, (area_altura - altura) // 2)
@@ -696,6 +783,53 @@ class AppGNRE:
         estilo.configure("primary.TRadiobutton", font=(fonte, 9), padding=(0, 2))
         estilo.configure("primary.TCheckbutton", font=(fonte, 9))
 
+        # Abas segmentadas do cartão do CT-e (XML / Chave).
+        estilo.configure(
+            "Aba.TButton",
+            background="#E7E8E9",
+            foreground=TEXTO_SUAVE,
+            bordercolor="#CFD0D1",
+            lightcolor="#F0F1F1",
+            darkcolor="#D6D7D8",
+            relief="flat",
+            font=(fonte, 9),
+            padding=(16, 5),
+        )
+        estilo.map(
+            "Aba.TButton",
+            background=[("active", "#EDEEEE"), ("pressed", "#DEDFDF")],
+        )
+        estilo.configure(
+            "AbaAtiva.TButton",
+            background=CARTAO,
+            foreground=ACENTO,
+            bordercolor=ACENTO,
+            lightcolor=CARTAO,
+            darkcolor=CARTAO,
+            relief="flat",
+            font=(fonte, 9, "bold"),
+            padding=(16, 5),
+        )
+        estilo.map(
+            "AbaAtiva.TButton",
+            background=[("active", CARTAO), ("pressed", CARTAO)],
+            foreground=[("active", ACENTO_ESCURO)],
+        )
+        estilo.configure(
+            "Chaves.Treeview",
+            background=CARTAO,
+            fieldbackground=CARTAO,
+            foreground=TEXTO,
+            bordercolor=BORDA,
+            rowheight=19,
+            font=(fonte, 8),
+        )
+        estilo.map(
+            "Chaves.Treeview",
+            background=[("selected", ACENTO_CLARO)],
+            foreground=[("selected", "#FFFFFF")],
+        )
+
     def _barra_topo(self, fonte_titulo: str) -> None:
         topo = Quadro(self.root, bg=FUNDO)
         topo.pack(fill="x", side="top")
@@ -789,6 +923,9 @@ class AppGNRE:
         self._grupo_lateral(conteudo, "EMISSÃO")
         self._item_lateral(conteudo, "Nova guia", self._focar_cte, ativo=True)
         self._item_lateral(conteudo, "Lote de XMLs", self._abrir_lote)
+        self._item_lateral(
+            conteudo, "Chave do CT-e", lambda: self._trocar_aba("chave")
+        )
 
         self._grupo_lateral(conteudo, "SISTEMA")
         self._item_lateral(
@@ -924,7 +1061,10 @@ class AppGNRE:
         return item
 
     def _focar_cte(self) -> None:
-        self.entrada_arquivo.focus_set()
+        if self.modo_entrada == "chave":
+            self.entrada_chave.focus_set()
+        else:
+            self.entrada_arquivo.focus_set()
 
     def _abrir_pasta_guias(self) -> None:
         pasta = Path(self.config.pasta_saida) if self.config else DADOS_DIR / "guias"
@@ -1269,10 +1409,55 @@ class AppGNRE:
     # ------------------------------------------------------------------
 
     def _caminhos_selecionados(self) -> list[str]:
+        if self.modo_entrada == "chave":
+            return [
+                item["caminho"]
+                for item in self.chaves
+                if item.get("caminho") and not item.get("erro")
+            ]
         if len(self.arquivos) > 1:
             return list(self.arquivos)
         caminho = self.var_arquivo.get().strip().strip('"')
         return [caminho] if caminho else []
+
+    def _limpar_leitura(self) -> None:
+        self.arquivos_lidos = {}
+        self.dados = None
+        self.arquivo_lido = None
+        self.resultado = None
+        self.pdf_path = None
+        self.var_uf.set("")
+        self.var_vencimento.set(vencimento_padrao().strftime("%d/%m/%Y"))
+        self.var_pagamento.set(date.today().strftime("%d/%m/%Y"))
+        self.entrada_uf.configure(state="readonly")
+
+    def _trocar_aba(self, modo: str) -> None:
+        if modo == self.modo_entrada:
+            return
+        self.modo_entrada = modo
+        if modo == "chave":
+            self.painel_xml.pack_forget()
+            self.painel_chave.pack(fill="x")
+            self.btn_aba_chave.configure(style="AbaAtiva.TButton")
+            self.btn_aba_xml.configure(style="Aba.TButton")
+            self.legenda_aba.configure(text="O XML é baixado pela chave na SEFAZ.")
+            self.entrada_chave.focus_set()
+            self.var_status.set(
+                "Informe a chave do CT-e. O XML é baixado pela distribuição da SEFAZ."
+            )
+        else:
+            self.painel_chave.pack_forget()
+            self.painel_xml.pack(fill="x")
+            self.btn_aba_xml.configure(style="AbaAtiva.TButton")
+            self.btn_aba_chave.configure(style="Aba.TButton")
+            self.legenda_aba.configure(text="Selecione o XML autorizado.")
+            self.entrada_arquivo.focus_set()
+            self.var_status.set("Selecione o XML do CT-e.")
+        self._limpar_leitura()
+
+    @staticmethod
+    def _formatar_chave(chave: str) -> str:
+        return " ".join(chave[i : i + 4] for i in range(0, len(chave), 4))
 
     def _resetar_selecao(self) -> None:
         self.entrada_arquivo.configure(state="normal")
@@ -1293,8 +1478,15 @@ class AppGNRE:
         return self.var_modo.get() == "varias"
 
     def _mudar_modo(self) -> None:
-        self._resetar_selecao()
-        if self._modo_varias():
+        self._limpar_leitura()
+        if self.modo_entrada == "chave":
+            if self._modo_varias():
+                self.var_status.set(
+                    "Modo várias GNRE: adicione as chaves do mesmo estado."
+                )
+            else:
+                self.var_status.set("Modo GNRE única: adicione a chave do CT-e.")
+        elif self._modo_varias():
             self.var_status.set("Modo várias GNRE: selecione XMLs do mesmo estado.")
         else:
             self.var_status.set("Modo GNRE única: selecione um XML do CT-e.")
@@ -1305,8 +1497,126 @@ class AppGNRE:
         )
 
     def _abrir_lote(self) -> None:
+        self._trocar_aba("xml")
         self.var_modo.set("varias")
         self._procurar()
+
+    # ------------------------------------------------------------------
+    # entrada por chave do CT-e
+    # ------------------------------------------------------------------
+
+    def _item_chave(self, chave: str) -> dict | None:
+        return next((item for item in self.chaves if item["chave"] == chave), None)
+
+    def _linha_chave(self, item: dict) -> None:
+        if not self.lista_chaves.exists(item["chave"]):
+            return
+        self.lista_chaves.item(
+            item["chave"],
+            values=(self._formatar_chave(item["chave"]), item["situacao"]),
+            tags=(item["tag"],),
+        )
+
+    def _definir_situacao(self, chave: str, situacao: str, tag: str) -> None:
+        item = self._item_chave(chave)
+        if item is None:
+            return
+        item["situacao"] = situacao
+        item["tag"] = tag
+        self._linha_chave(item)
+
+    def _adicionar_chave(self) -> None:
+        chave = re.sub(r"\D", "", self.var_chave.get())
+        if not chave:
+            return
+        self.var_chave.set("")
+        try:
+            validar_chave(chave)
+        except Exception as erro:
+            messagebox.showwarning("Chave inválida", str(erro))
+            self.var_status.set("Chave inválida. Confira os 44 dígitos.")
+            return
+        if self._item_chave(chave) is not None:
+            messagebox.showinfo("Chave repetida", "Esta chave já está na lista.")
+            return
+        if self.modo_entrada != "chave":
+            self._trocar_aba("chave")
+        item = {
+            "chave": chave,
+            "situacao": "Aguardando o XML...",
+            "tag": "pendente",
+            "caminho": None,
+            "erro": None,
+            "ambiente": self.var_ambiente.get(),
+        }
+        self.chaves.append(item)
+        self.lista_chaves.insert(
+            "", "end", iid=chave,
+            values=(self._formatar_chave(chave), item["situacao"]),
+            tags=("pendente",),
+        )
+        self.lista_chaves.see(chave)
+        self._log(f"Chave adicionada: {self._formatar_chave(chave)}")
+        self.var_status.set("Baixando o XML do CT-e pela chave...")
+        self._fila_chaves.put(chave)
+
+    def _baixar_chaves(self) -> None:
+        while True:
+            chave = self._fila_chaves.get()
+            if chave is None:
+                return
+            item = self._item_chave(chave)
+            if item is None:
+                continue
+            cert = self.certificado
+            if cert is None:
+                self.fila.put(
+                    ("chave_erro", (chave, "Certificado digital não carregado."))
+                )
+                continue
+            cache = self.xml_dir / f"{chave}.xml"
+            if cache.exists() and time.monotonic() - self._ultima_distribuicao < 300:
+                self.fila.put(("chave_pronta", (chave, str(cache))))
+                continue
+            self.fila.put(("chave_situacao", (chave, "Consultando a SEFAZ...")))
+            config = self.config
+            try:
+                with DistribuicaoCTe(
+                    cert,
+                    self.xml_dir,
+                    ambiente=item["ambiente"],
+                    uf_autor=config.uf_autor if config is not None else "42",
+                    timeout=config.timeout if config is not None else 60,
+                    verificar_ssl=config.verificar_ssl if config is not None else True,
+                    log=lambda mensagem: self.fila.put(("log", mensagem)),
+                ) as cliente:
+                    caminho = cliente.obter(chave)
+                self._ultima_distribuicao = time.monotonic()
+                self.fila.put(("chave_pronta", (chave, str(caminho))))
+            except Exception as erro:
+                self._ultima_distribuicao = time.monotonic()
+                self.fila.put(("chave_erro", (chave, f"{erro}")))
+
+    def _remover_chave(self) -> None:
+        selecao = self.lista_chaves.selection()
+        if not selecao:
+            messagebox.showwarning("Aviso", "Selecione a chave que deseja remover.")
+            return
+        chave = selecao[0]
+        self.lista_chaves.delete(chave)
+        self.chaves = [item for item in self.chaves if item["chave"] != chave]
+        if self._caminhos_selecionados():
+            self._ler_cte(avisar=False)
+        else:
+            self._limpar_leitura()
+            self.var_status.set("Nenhuma chave selecionada.")
+
+    def _limpar_chaves(self) -> None:
+        for chave in list(self.lista_chaves.get_children()):
+            self.lista_chaves.delete(chave)
+        self.chaves = []
+        self._limpar_leitura()
+        self.var_status.set("Lista de chaves limpa.")
 
     def _procurar(self) -> None:
         if self._modo_varias():
@@ -1343,21 +1653,34 @@ class AppGNRE:
         self.var_status.set("Lendo os CT-es...")
         self._ler_cte()
 
-    def _ler_cte(self) -> None:
+    def _ler_cte(self, avisar: bool = True) -> None:
         caminhos = self._caminhos_selecionados()
         if not caminhos:
-            messagebox.showwarning("Aviso", "Selecione um arquivo XML de CT-e válido.")
+            if avisar:
+                messagebox.showwarning(
+                    "Aviso", "Selecione um arquivo XML de CT-e válido."
+                )
+            else:
+                self.var_status.set("Aguardando o XML do CT-e.")
             return
         if self.config is None:
-            messagebox.showerror("Erro", "Configuração inválida. Corrija o config.json.")
+            if avisar:
+                messagebox.showerror(
+                    "Erro", "Configuração inválida. Corrija o config.json."
+                )
+            else:
+                self.var_status.set("Configuração inválida. Corrija o config.json.")
             return
 
         for caminho in caminhos:
             if not Path(caminho).exists():
                 self.var_status.set("Arquivo não encontrado.")
-                messagebox.showwarning(
-                    "Aviso", f"Arquivo não encontrado:\n{caminho}"
-                )
+                if avisar:
+                    messagebox.showwarning(
+                        "Aviso", f"Arquivo não encontrado:\n{caminho}"
+                    )
+                else:
+                    self._log(f"ERRO: arquivo não encontrado: {caminho}")
                 return
 
         self.arquivos_lidos = {}
@@ -1372,11 +1695,12 @@ class AppGNRE:
                 lidos[str(Path(caminho).resolve())] = ler_cte_xml(caminho)
             except Exception as erro:
                 self.var_status.set("Erro ao ler o CT-e.")
-                messagebox.showerror(
-                    "Erro ao ler o CT-e",
-                    f"{Path(caminho).name}\n\n{erro}",
-                )
                 self._log(f"ERRO ao ler o CT-e {caminho}: {erro}")
+                if avisar:
+                    messagebox.showerror(
+                        "Erro ao ler o CT-e",
+                        f"{Path(caminho).name}\n\n{erro}",
+                    )
                 return
 
         lote = self._modo_varias() or len(lidos) > 1
@@ -1386,25 +1710,27 @@ class AppGNRE:
         if len(ufs) > 1:
             lista = ", ".join(sorted(ufs))
             self.var_status.set(f"XMLs de UFs diferentes ({lista}) — lote não carregado.")
-            messagebox.showerror(
-                "UFs diferentes",
-                f"Os XMLs selecionados são de UFs diferentes ({lista}).\n"
-                "Selecione apenas arquivos do mesmo estado para gerar o lote.",
-            )
             self._log(f"ERRO: os XMLs do lote têm UFs diferentes: {lista}.")
+            if avisar:
+                messagebox.showerror(
+                    "UFs diferentes",
+                    f"Os XMLs selecionados são de UFs diferentes ({lista}).\n"
+                    "Selecione apenas arquivos do mesmo estado para gerar o lote.",
+                )
             return
         if lote and sem_uf:
             nomes = "\n".join(f"- {Path(caminho).name}" for caminho in sem_uf)
             self.var_status.set("XML sem UF favorecida — lote não carregado.")
-            messagebox.showerror(
-                "UF não informada",
-                "Estes XMLs não trazem a UF favorecida (ICMSOutraUF):\n"
-                f"{nomes}\n\nO lote exige a UF definida em todos os arquivos. "
-                "Emita esses arquivos individualmente e informe a UF.",
-            )
             self._log("ERRO: o lote contém XML sem UF favorecida:")
             for caminho in sem_uf:
                 self._log(f"- {Path(caminho).name}")
+            if avisar:
+                messagebox.showerror(
+                    "UF não informada",
+                    "Estes XMLs não trazem a UF favorecida (ICMSOutraUF):\n"
+                    f"{nomes}\n\nO lote exige a UF definida em todos os arquivos. "
+                    "Emita esses arquivos individualmente e informe a UF.",
+                )
             return
 
         self.arquivos_lidos = lidos
@@ -1482,9 +1808,21 @@ class AppGNRE:
     def _emitir(self) -> None:
         if self.em_execucao:
             return
+        if self.modo_entrada == "chave":
+            pendentes = [item for item in self.chaves if not item.get("caminho")]
+            if pendentes:
+                messagebox.showwarning(
+                    "Aviso",
+                    f"{len(pendentes)} chave(s) ainda sem XML. Aguarde o download "
+                    "ou remova as chaves com erro antes de emitir.",
+                )
+                return
         caminhos = self._caminhos_selecionados()
         if not caminhos:
-            messagebox.showwarning("Aviso", "Selecione o XML do CT-e.")
+            if self.modo_entrada == "chave":
+                messagebox.showwarning("Aviso", "Adicione ao menos uma chave do CT-e.")
+            else:
+                messagebox.showwarning("Aviso", "Selecione o XML do CT-e.")
             return
         if self.config is None:
             messagebox.showerror("Erro", "Configuração inválida. Corrija o config.json.")
@@ -1632,10 +1970,12 @@ class AppGNRE:
     def _emitir_lote(self, caminhos: list[str]) -> None:
         faltando = [caminho for caminho in caminhos if caminho not in self.arquivos_lidos]
         if faltando:
-            messagebox.showinfo(
-                "Leia os XMLs",
-                "Clique em 'Ler e conferir' para validar o lote antes de emitir.",
+            dica = (
+                "Aguarde o download dos XMLs das chaves antes de emitir."
+                if self.modo_entrada == "chave"
+                else "Clique em 'Ler e conferir' para validar o lote antes de emitir."
             )
+            messagebox.showinfo("Leia os CT-es", dica)
             return
         dados = [self.arquivos_lidos[caminho] for caminho in caminhos]
         ufs = {item.uf_favorecida for item in dados}
@@ -1943,6 +2283,43 @@ class AppGNRE:
                     self._finalizar(dado)
                 elif tipo == "pdf_preparado":
                     self._pdf_preparado(*dado)
+                elif tipo == "chave_situacao":
+                    chave, situacao = dado
+                    self._definir_situacao(chave, situacao, "pendente")
+                elif tipo == "chave_pronta":
+                    chave, caminho = dado
+                    item = self._item_chave(chave)
+                    if item is not None:
+                        item["caminho"] = caminho
+                        item["erro"] = None
+                    self._definir_situacao(chave, "XML pronto", "pronto")
+                    self._log(
+                        f"CT-e {self._formatar_chave(chave)} baixado: {caminho}"
+                    )
+                    pendentes = [
+                        outro
+                        for outro in self.chaves
+                        if not outro.get("caminho") and not outro.get("erro")
+                    ]
+                    if pendentes:
+                        self.var_status.set(
+                            f"Baixando os CT-es... {len(pendentes)} restante(s)."
+                        )
+                    else:
+                        self.var_status.set("CT-es baixados. Lendo os dados da guia...")
+                        self._ler_cte(avisar=False)
+                elif tipo == "chave_erro":
+                    chave, mensagem = dado
+                    item = self._item_chave(chave)
+                    if item is not None:
+                        item["erro"] = mensagem
+                    self._definir_situacao(chave, "Erro — veja o Registro", "erro")
+                    self._log(
+                        f"ERRO na chave {self._formatar_chave(chave)}: {mensagem}"
+                    )
+                    self.var_status.set(
+                        "Não foi possível baixar um dos CT-es. Veja o Registro."
+                    )
                 elif tipo == "atualizacao_consulta":
                     self._avaliar_atualizacao(dado)
                 elif tipo == "atualizacao_disponivel":
