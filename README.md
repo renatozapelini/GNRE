@@ -19,9 +19,16 @@ não permite escrita). Nada sensível é gravado na pasta do programa.
 
 ## Atualização
 
-No menu (ícone no canto superior esquerdo) use **Verificar atualização**.
-O app consulta a última release deste repositório e, se houver versão nova,
-baixa, instala silenciosamente e reabre. A pasta `ConfGNRE` é preservada.
+Ao abrir, o programa confere em segundo plano a última release deste
+repositório e avisa quando há versão nova. Também é possível conferir a
+qualquer momento pelo menu (ícone no canto superior esquerdo):
+**Verificar atualização**. O download e a instalação são automáticos, e a
+pasta `ConfGNRE` é preservada.
+
+Para publicar uma versão nova, crie uma release com tag `vX.Y.Z` e envie os
+arquivos `Instalar GNRE.exe` e `GNRE.exe`. O programa compara a tag com a
+versão instalada, prefere o instalador completo e, se ele não estiver
+presente, atualiza somente o executável.
 
 ## Uso responsável
 
