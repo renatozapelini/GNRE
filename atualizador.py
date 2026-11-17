@@ -239,6 +239,7 @@ for ($i = 0; $i -lt 480; $i++) {{
 Start-Sleep -Milliseconds 700
 {aplicacao}
 {abertura}
+Remove-Item -LiteralPath '{_ps(novo_exe)}' -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
 """
     script.write_text(conteudo, encoding="utf-8-sig")
