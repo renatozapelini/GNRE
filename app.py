@@ -470,11 +470,12 @@ class AppGNRE:
 
         caixa_lista = Quadro(self.painel_chave, bg=CARTAO)
         caixa_lista.pack(fill="x", pady=(5, 0))
+        self.caixa_lista = caixa_lista
         self.lista_chaves = ttk.Treeview(
             caixa_lista,
             columns=("chave", "situacao"),
             show="",
-            height=2,
+            height=1,
             selectmode="browse",
             style="Chaves.Treeview",
         )
@@ -1498,6 +1499,7 @@ class AppGNRE:
 
     def _mudar_modo(self) -> None:
         self._limpar_leitura()
+        self._ajustar_lista_chaves()
         if self.modo_entrada == "chave":
             if self._modo_varias():
                 self.var_status.set(
@@ -1509,6 +1511,19 @@ class AppGNRE:
             self.var_status.set("Modo várias GNRE: selecione XMLs do mesmo estado.")
         else:
             self.var_status.set("Modo GNRE única: selecione um XML do CT-e.")
+
+    def _ajustar_lista_chaves(self) -> None:
+        """Na GNRE única a lista mostra uma linha; várias guias mostram a fila."""
+        self.lista_chaves.configure(height=2 if self._modo_varias() else 1)
+        if self._modo_varias() or len(self.chaves) <= 1:
+            return
+        ultima = self.chaves[-1]
+        for chave in list(self.lista_chaves.get_children()):
+            if chave != ultima["chave"]:
+                self.lista_chaves.delete(chave)
+        self.chaves = [ultima]
+        self._limpar_leitura()
+        self._log("Modo GNRE única: mantida apenas a última chave da lista.")
 
     def _atualizar_selecao(self) -> None:
         self.btn_emitir.configure(
@@ -1560,6 +1575,12 @@ class AppGNRE:
             return
         if self.modo_entrada != "chave":
             self._trocar_aba("chave")
+        if not self._modo_varias() and self.chaves:
+            for antiga in list(self.lista_chaves.get_children()):
+                self.lista_chaves.delete(antiga)
+            self.chaves = []
+            self._limpar_leitura()
+            self._log("Modo GNRE única: a chave anterior foi substituída.")
         item = {
             "chave": chave,
             "situacao": "Aguardando o XML...",

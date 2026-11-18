@@ -8,11 +8,12 @@ import queue
 import shutil
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-VERSAO = "3.2.3"
+VERSAO = "3.2.4"
 ATALHO = "Emissor de Guias"
 ATALHOS_ANTIGOS = ("Emissor GNRE",)
 PASTA_PROGRAMA = "GNRE"
@@ -260,17 +261,32 @@ def _criar_atalho(destino: Path, alvo: Path, icone: Path, descricao: str) -> Non
     atalho.save()
 
 
+def _copiar_programa(origem: Path, destino: Path, limite: float = 90.0) -> None:
+    """Copia o programa; se algum arquivo estiver em uso, tenta de novo.
+
+    Na atualização automática o app pode reabrir antes da cópia terminar (ou
+    haver outra instância aberta), e os arquivos ficam travados com WinError 32.
+    """
+    inicio = time.monotonic()
+    while True:
+        try:
+            shutil.copytree(origem, destino, dirs_exist_ok=True)
+            return
+        except PermissionError as erro:
+            if time.monotonic() - inicio >= limite:
+                raise InstalacaoBloqueada(
+                    "O Emissor de Guias está aberto. Feche o programa e clique em "
+                    "Instalar novamente."
+                ) from erro
+            time.sleep(1.5)
+
+
 def instalar(com_certificado: bool, registrar=print) -> dict:
     programa = pasta_programa()
     programa.mkdir(parents=True, exist_ok=True)
     origem_app = pasta_app_embutida()
     destino_exe = programa / "GNRE.exe"
-    try:
-        shutil.copytree(origem_app, programa, dirs_exist_ok=True)
-    except PermissionError as erro:
-        raise InstalacaoBloqueada(
-            "O Emissor de Guias está aberto. Feche o programa e clique em Instalar novamente."
-        ) from erro
+    _copiar_programa(origem_app, programa)
     registrar(f"Programa: {destino_exe}")
 
     icone = programa / "gnre.ico"

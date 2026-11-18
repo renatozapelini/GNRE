@@ -263,8 +263,10 @@ class DistribuicaoCTe:
     # processamento dos lotes
     # ------------------------------------------------------------------
 
-    def _processar_docs(self, docs: list[dict], estado: dict) -> int:
+    def _processar_docs(self, docs: list[dict], estado: dict) -> tuple[int, int]:
+        """Grava os CT-es novos e conta os cancelamentos vistos na varredura."""
         salvos = 0
+        cancelados = 0
         for doc in docs:
             if not doc["conteudo"]:
                 continue
@@ -278,7 +280,7 @@ class DistribuicaoCTe:
                 continue
             if _cancelamento_autorizado(raiz):
                 if chave not in estado["cancelados"]:
-                    self._registrar(f"CT-e {chave}: cancelamento registrado.")
+                    cancelados += 1
                 estado["cancelados"].add(chave)
                 continue
             if _achar(raiz, "infCte") is None:
@@ -287,17 +289,20 @@ class DistribuicaoCTe:
             if not destino.exists():
                 destino.write_bytes(bruto)
                 salvos += 1
-        return salvos
+        return salvos, cancelados
 
     def sincronizar(self, limite_paginas: int = PAGINAS_MAX) -> dict:
         estado = self._carregar_estado()
         salvos = 0
+        cancelados = 0
         max_nsu = 0
         parcial = False
 
         if not estado["iniciado"]:
             ret = self._consultar(0)
-            salvos += self._processar_docs(ret["doczip"], estado)
+            novos, vistos = self._processar_docs(ret["doczip"], estado)
+            salvos += novos
+            cancelados += vistos
             max_nsu = ret["max_nsu"]
             if ret["cstat"] not in ("137", "138"):
                 raise ErroDistribuicaoCTe(
@@ -327,7 +332,9 @@ class DistribuicaoCTe:
         paginas = 0
         while True:
             ret = self._consultar(estado["ult_nsu"])
-            salvos += self._processar_docs(ret["doczip"], estado)
+            novos, vistos = self._processar_docs(ret["doczip"], estado)
+            salvos += novos
+            cancelados += vistos
             max_nsu = ret["max_nsu"]
             if ret["cstat"] not in ("137", "138"):
                 raise ErroDistribuicaoCTe(
@@ -345,9 +352,15 @@ class DistribuicaoCTe:
                 break
             time.sleep(PAUSA_PAGINA)
 
+        extra = []
+        if salvos:
+            extra.append(f"{salvos} XML(s) novo(s)")
+        if cancelados:
+            extra.append(f"{cancelados} cancelamento(s) registrado(s)")
         self._registrar(
             f"Distribuição do CT-e: NSU {estado['ult_nsu']} de {max_nsu} "
-            f"({salvos} XML(s) novo(s)){' — consulta parcial' if parcial else ''}."
+            f"({', '.join(extra) or 'nada novo'})"
+            f"{' — consulta parcial' if parcial else ''}."
         )
         return {
             "salvos": salvos,
