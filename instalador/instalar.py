@@ -13,7 +13,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-VERSAO = "3.2.5"
+VERSAO = "3.2.6"
 ATALHO = "Emissor de Guias"
 ATALHOS_ANTIGOS = ("Emissor GNRE",)
 PASTA_PROGRAMA = "GNRE"
@@ -261,19 +261,29 @@ def _criar_atalho(destino: Path, alvo: Path, icone: Path, descricao: str) -> Non
     atalho.save()
 
 
+def _arquivo_em_uso(erro: Exception) -> bool:
+    texto = str(erro)
+    return (
+        isinstance(erro, PermissionError)
+        or "[WinError 32]" in texto
+        or "usado por outro processo" in texto
+    )
+
+
 def _copiar_programa(origem: Path, destino: Path, limite: float = 90.0) -> None:
     """Copia o programa; se algum arquivo estiver em uso, tenta de novo.
 
-    Na atualização automática o app pode reabrir antes da cópia terminar (ou
-    haver outra instância aberta), e os arquivos ficam travados com WinError 32.
+    O copytree não levanta PermissionError: ele junta as falhas por arquivo em
+    shutil.Error. Na atualização automática o app pode reabrir antes da cópia
+    terminar (ou haver outra instância aberta) e os arquivos ficam com WinError 32.
     """
     inicio = time.monotonic()
     while True:
         try:
             shutil.copytree(origem, destino, dirs_exist_ok=True)
             return
-        except PermissionError as erro:
-            if time.monotonic() - inicio >= limite:
+        except (PermissionError, shutil.Error) as erro:
+            if not _arquivo_em_uso(erro) or time.monotonic() - inicio >= limite:
                 raise InstalacaoBloqueada(
                     "O Emissor de Guias está aberto. Feche o programa e clique em "
                     "Instalar novamente."
