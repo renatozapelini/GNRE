@@ -57,6 +57,8 @@ def emitir(
     config = carregar()
     if visivel is not None:
         config["modo_visivel"] = bool(visivel)
+    # A escolha feita no app vale também no captcha: oculto continua oculto.
+    config["tentar_visivel_em_captcha"] = bool(config.get("modo_visivel", False))
 
     def _log_portal(mensagem: str, nivel: str = "info") -> None:
         if log is None:
@@ -86,7 +88,7 @@ def emitir(
     resultado.pdf_path = None
     if entrega.estado == "captcha":
         resultado.mensagens = [
-            "O portal pediu captcha. Use Opções → Emitir com navegador visível "
+            "O portal pediu captcha. Ative 'Portal: navegador visível' no menu "
             "para concluir esta UF.",
             entrega.mensagem,
         ]

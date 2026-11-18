@@ -343,6 +343,13 @@ def normalizar_config_uf(xml_bytes: bytes, uf: str, receita: str) -> dict:
         for no_tipo in _findall(_find(alvo, "tiposDocumentosOrigem"), "tipoDocumentoOrigem")
     ]
 
+    detalhamentos = [
+        {"codigo": _texto(no_det, "codigo"), "descricao": _texto(no_det, "descricao")}
+        for no_det in _findall(
+            _find(alvo, "detalhamentosReceita"), "detalhamentoReceita"
+        )
+    ]
+
     return {
         "uf": _texto(root, "uf") or uf,
         "ambiente": _texto(root, "ambiente"),
@@ -359,8 +366,14 @@ def normalizar_config_uf(xml_bytes: bytes, uf: str, receita: str) -> dict:
             "exige_parcela": _booleano(_texto(alvo, "exigeParcela")),
             "exige_produto": _booleano(_texto(alvo, "exigeProduto")),
             "exige_campos_adicionais": _booleano(_texto(alvo, "exigeCamposAdicionais")),
+            "exige_documento_origem": (
+                _booleano(_texto(alvo, "exigeDocumentoOrigem"))
+                if _find(alvo, "exigeDocumentoOrigem") is not None
+                else None
+            ),
             "valor_exigido": _texto(alvo, "valorExigido"),
             "tipos_documento": tipos,
+            "detalhamentos": detalhamentos,
             "campos_adicionais": campos,
             "tipos_gnre": [_texto(no, "tipoGnre") for no in _findall(_find(alvo, "tiposGnre"), "tipoGnre")],
             "aceita_pix": _booleano(_texto(alvo, "aceitaPgPix")),
@@ -390,34 +403,57 @@ def montar_regras(
     if live and live_receita.get("codigo") != receita:
         raise ErroGNRE(f"Configuração online da UF {uf} não contém a receita {receita}.")
 
+    exige_documento = live_receita.get("exige_documento_origem")
+    if exige_documento is None:
+        exige_documento = bool(fallback.get("exige_documento_origem", True))
+
     aceitos = list(live_receita.get("tipos_documento") or fallback.get("tipos_documento") or [])
     padrao_documento = False
-    if not aceitos:
-        aceitos = ["07", "10", "08", "01"]
-        padrao_documento = True
-
-    if tipo_preferido in aceitos:
-        documento_tipo = tipo_preferido
+    documento_tipo = ""
+    if not exige_documento:
+        # UF como o RJ: a receita não usa documento de origem; enviar o campo
+        # (mesmo no tipo do CT-e) é rejeitado com o erro 217.
+        aceitos = []
     else:
-        # 07 = CT-e (número), 21 = conhecimento de transporte (número) e
-        # 23 = chave do CT-e. 22 é chave de NF-e e não serve para o CT-e.
-        documento_tipo = next(
-            (tipo for tipo in ("07", "21", "23") if tipo in aceitos),
-            aceitos[0],
-        )
-    if not padrao_documento and documento_tipo not in {"07", "21", "23"}:
-        raise ErroGNRE(
-            f"A UF {uf} não aceita CT-e (tipos 07/21/23) na receita {receita}; "
-            f"tipos aceitos: {', '.join(aceitos)}. Emita esta guia manualmente no portal GNRE."
-        )
+        if not aceitos:
+            aceitos = ["07", "10", "08", "01"]
+            padrao_documento = True
+
+        if tipo_preferido in aceitos:
+            documento_tipo = tipo_preferido
+        else:
+            # 07 = CT-e (número), 21 = conhecimento de transporte (número) e
+            # 23 = chave do CT-e. 22 é chave de NF-e e não serve para o CT-e.
+            documento_tipo = next(
+                (tipo for tipo in ("07", "21", "23") if tipo in aceitos),
+                aceitos[0],
+            )
+        if not padrao_documento and documento_tipo not in {"07", "21", "23"}:
+            raise ErroGNRE(
+                f"A UF {uf} não aceita CT-e (tipos 07/21/23) na receita {receita}; "
+                f"tipos aceitos: {', '.join(aceitos)}. Emita esta guia manualmente no portal GNRE."
+            )
 
     exige_detalhamento = bool(
         live_receita.get("exige_detalhamento", fallback.get("exige_detalhamento", False))
     )
+    opcoes = [
+        item
+        for item in (live_receita.get("detalhamentos") or [])
+        if item.get("codigo")
+    ]
+    if exige_detalhamento and not detalhamento and len(opcoes) == 1:
+        # Uma única opção no portal: não há o que escolher.
+        detalhamento = str(opcoes[0]["codigo"])
     if exige_detalhamento and not detalhamento:
+        lista = "; ".join(
+            f"{item['codigo']} ({item.get('descricao') or 'sem descrição'})"
+            for item in opcoes
+        )
         raise ErroGNRE(
-            f"A UF {uf} exige detalhamento da receita {receita}, mas não há código configurado "
-            "em regras_uf.json. Consulte o portal GNRE antes de emitir."
+            f"A UF {uf} exige detalhamento da receita {receita}"
+            + (f". Opções no portal: {lista}." if lista else ".")
+            + " Informe o código em regras_uf.json antes de emitir."
         )
     if bool(live_receita.get("exige_produto")):
         raise ErroGNRE(
@@ -453,6 +489,11 @@ def montar_regras(
 
     convenio = local.get("convenio") or (convenios or {}).get(uf)
     avisos = []
+    if not exige_documento:
+        avisos.append(
+            f"A UF {uf} não usa documento de origem nesta receita; a guia vai sem "
+            "o campo 'documentoOrigem'."
+        )
     if padrao_documento:
         avisos.append(
             f"A UF {uf} não informou os tipos de documento aceitos; usando o tipo "
@@ -629,8 +670,12 @@ def _data_br(valor: str | None) -> str:
         return str(valor or "")
 
 
-def _documento_origem(dados: DadosCTe, regras: RegrasUF, numero_documento: str | None) -> str:
+def _documento_origem(
+    dados: DadosCTe, regras: RegrasUF, numero_documento: str | None
+) -> str | None:
     tipo = regras.documento_tipo
+    if not tipo:
+        return None
     if tipo in {"07", "21"}:
         return dados.numero
     if tipo == "23":
@@ -670,7 +715,7 @@ def montar_lote(
         raise ErroGNRE("Valor de ICMS inválido para emissão da GNRE.")
 
     documento = _documento_origem(dados, regras, numero_documento)
-    if not documento:
+    if regras.documento_tipo and not documento:
         raise ErroGNRE("Número do documento de origem vazio.")
 
     municipio = somente_digitos(contribuinte.municipio)[-5:]
@@ -733,7 +778,8 @@ def montar_lote(
     no(item, "receita", regras.receita)
     if regras.detalhamento:
         no(item, "detalhamentoReceita", regras.detalhamento)
-    no(item, "documentoOrigem", documento, tipo=regras.documento_tipo)
+    if regras.documento_tipo:
+        no(item, "documentoOrigem", documento, tipo=regras.documento_tipo)
     if regras.exige_periodo_referencia:
         referencia = no(item, "referencia")
         no(referencia, "periodo", "0")
@@ -1518,7 +1564,12 @@ class ResultadoEmissao:
                 [
                     f"UF favorecida: {r['uf_favorecida']}",
                     f"Contribuinte: {detalhe_contribuinte} ({identificacao})",
-                    f"Receita: {r['receita']} - documento tipo {r['documento_tipo']}: {r['documento_origem']}",
+                    f"Receita: {r['receita']} - "
+                    + (
+                        f"documento tipo {r['documento_tipo']}: {r['documento_origem']}"
+                        if r.get("documento_tipo")
+                        else "sem documento de origem"
+                    ),
                     f"Valor: R$ {r['valor'].replace('.', ',')}",
                     f"Vencimento: {_data_br(r['data_vencimento'])}"
                     f" - pagamento: {_data_br(r['data_pagamento'])}",
@@ -1862,7 +1913,8 @@ def emitir_guia(
             resultado.regras = regras
             resultado.avisos.extend(regras.avisos)
             registrar(
-                f"Regras: receita {regras.receita}, documento tipo {regras.documento_tipo}, "
+                f"Regras: receita {regras.receita}, documento de origem "
+                f"{('tipo ' + regras.documento_tipo) if regras.documento_tipo else 'não usado'}, "
                 f"fonte {regras.fonte}."
             )
 

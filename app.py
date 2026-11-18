@@ -310,7 +310,10 @@ class AppGNRE:
         self._pdf_retry_id = 0
         self._lote_info: tuple[int, int] | None = None
         self._lateral_aberta = False
-        self._portal_visivel = False
+        try:
+            self._portal_visivel = bool(self._ler_estado_ui().get("portal_visivel"))
+        except Exception:
+            self._portal_visivel = False
         self.modo_entrada = "numero"
         self.chaves: list[dict] = []
         self.xml_dir = DADOS_DIR / "xmls"
@@ -325,6 +328,7 @@ class AppGNRE:
         self.var_chave = tk.StringVar()
         self.var_pdf = tk.StringVar()
         self.var_modo = tk.StringVar(value="unica")
+        self.var_cte = tk.StringVar()
         self.var_uf = tk.StringVar()
         self.var_valor = tk.StringVar()
         self.var_vencimento = tk.StringVar(value=vencimento_padrao().strftime("%d/%m/%Y"))
@@ -535,10 +539,11 @@ class AppGNRE:
         )
         grade = Quadro(cartao_dados, bg=CARTAO)
         grade.pack(fill="x")
-        self.entrada_uf = self._campo(grade, 0, "UF favorecida", self.var_uf, 8)
-        self._campo(grade, 1, "Valor da guia", self.var_valor, 16)
-        self._campo(grade, 2, "Vencimento", self.var_vencimento, 13)
-        self._campo(grade, 3, "Pagamento", self.var_pagamento, 13)
+        self._campo(grade, 0, "CT-e", self.var_cte, 16)
+        self.entrada_uf = self._campo(grade, 1, "UF favorecida", self.var_uf, 8)
+        self._campo(grade, 2, "Valor da guia", self.var_valor, 16)
+        self._campo(grade, 3, "Vencimento", self.var_vencimento, 13)
+        self._campo(grade, 4, "Pagamento", self.var_pagamento, 13)
 
         linha_acao = Quadro(cartao_dados, bg=CARTAO)
         linha_acao.pack(fill="x", pady=(9, 0))
@@ -726,15 +731,40 @@ class AppGNRE:
         largura, altura, x, y = (int(valor) for valor in combinacao.groups())
         return largura, altura, x, y, bool(dados.get("zoom"))
 
+    def _ler_estado_ui(self) -> dict:
+        try:
+            dados = json.loads(UI_STATE_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return dados if isinstance(dados, dict) else {}
+
+    def _gravar_estado_ui(self, **campos) -> None:
+        dados = self._ler_estado_ui()
+        dados.update(campos)
+        try:
+            UI_STATE_PATH.write_text(json.dumps(dados), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _pasta_dialogo(self, chave: str, padrao: Path | None = None) -> str:
+        """Última pasta usada nos diálogos do próprio app; nunca a de outro programa."""
+        pasta = Path(str(self._ler_estado_ui().get(chave) or ""))
+        if pasta.is_dir():
+            return str(pasta)
+        return str(padrao) if padrao is not None and padrao.is_dir() else ""
+
+    def _lembrar_pasta(self, chave: str, arquivo: str) -> None:
+        pasta = str(Path(arquivo).expanduser().parent)
+        if self._ler_estado_ui().get(chave) != pasta:
+            self._gravar_estado_ui(**{chave: pasta})
+
     def _salvar_estado_janela(self) -> None:
         try:
-            dados = {
-                "geometry": self.root.geometry(),
-                "zoom": self.root.state() == "zoomed",
-            }
-            UI_STATE_PATH.write_text(json.dumps(dados), encoding="utf-8")
-        except (OSError, tk.TclError):
-            pass
+            geometria = self.root.geometry()
+            zoom = self.root.state() == "zoomed"
+        except tk.TclError:
+            return
+        self._gravar_estado_ui(geometry=geometria, zoom=zoom)
 
     def _configurar_estilos(self, estilo: "ttkb.Style") -> None:
         fonte = self.fonte
@@ -980,8 +1010,8 @@ class AppGNRE:
         self._item_lateral(conteudo, "Pasta das guias", self._abrir_pasta_guias)
         self._item_lateral(conteudo, "Pasta de configuração", self._abrir_pasta_config)
         self._item_lateral(conteudo, "Verificar atualização", self._verificar_atualizacao)
-        self._item_lateral(
-            conteudo, "Portal: mostrar navegador", self._alternar_portal_visivel
+        self.item_portal_visivel = self._item_lateral(
+            conteudo, self._rotulo_portal_visivel(), self._alternar_portal_visivel
         )
         self._item_lateral(
             conteudo, "Portal: instalar navegador", self._instalar_navegador_portal
@@ -1291,9 +1321,23 @@ class AppGNRE:
         )
         self.root.after(700, self.root.destroy)
 
+    def _rotulo_portal_visivel(self) -> str:
+        return (
+            "Portal: navegador visível"
+            if self._portal_visivel
+            else "Portal: navegador oculto"
+        )
+
     def _alternar_portal_visivel(self) -> None:
         self._portal_visivel = not self._portal_visivel
+        self._gravar_estado_ui(portal_visivel=self._portal_visivel)
         estado = "visível" if self._portal_visivel else "oculto"
+        try:
+            for filho in self.item_portal_visivel.winfo_children():
+                if isinstance(filho, Rotulo):
+                    filho.configure(text=self._rotulo_portal_visivel())
+        except (AttributeError, tk.TclError):
+            pass
         self._log(
             f"Portal estadual: navegador {estado}. "
             "Use visível somente quando o portal pedir captcha."
@@ -1423,6 +1467,44 @@ class AppGNRE:
     # contexto (configuração e certificado)
     # ------------------------------------------------------------------
 
+    def _completar_regras(self, caminho: Path | None) -> None:
+        """Acrescenta ao regras_uf.json do usuário as UFs que vieram no pacote.
+
+        As regras do usuário são preservadas; só entram UFs que ainda não
+        existem no arquivo dele.
+        """
+        if caminho is None:
+            return
+        caminho = Path(caminho)
+        padrao = RECURSOS / "regras_uf.json"
+        if not caminho.exists() or not padrao.exists():
+            return
+        if caminho.resolve() == padrao.resolve():
+            return
+        try:
+            atuais = json.loads(caminho.read_text(encoding="utf-8"))
+            novos = json.loads(padrao.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        faltando = {uf: regra for uf, regra in novos.items() if uf not in atuais}
+        if not faltando:
+            return
+        atuais.update(faltando)
+        temporario = caminho.with_suffix(".tmp")
+        try:
+            temporario.write_text(
+                json.dumps(atuais, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporario, caminho)
+        except OSError:
+            try:
+                temporario.unlink()
+            except OSError:
+                pass
+            return
+        self._log("Regras locais atualizadas: " + ", ".join(sorted(faltando)))
+
     def _carregar_contexto(self) -> None:
         try:
             self.config = carregar_config(CONFIG_PATH, tolerar_sem_senha=True)
@@ -1435,6 +1517,7 @@ class AppGNRE:
             self.lbl_cert_ponto.configure(fg=PERIGO)
             self._bloquear("Corrija o config.json ou atualize o certificado.")
             return
+        self._completar_regras(self.config.arquivo_regras)
         if self.config.schemas_dir is not None and not Path(
             self.config.schemas_dir
         ).is_dir():
@@ -1508,6 +1591,7 @@ class AppGNRE:
         self.arquivo_lido = None
         self.resultado = None
         self.pdf_path = None
+        self.var_cte.set("")
         self.var_uf.set("")
         self.var_valor.set("")
         self.var_vencimento.set(vencimento_padrao().strftime("%d/%m/%Y"))
@@ -1573,6 +1657,7 @@ class AppGNRE:
         self.resultado = None
         self.pdf_path = None
         self.var_arquivo.set("")
+        self.var_cte.set("")
         self.var_uf.set("")
         self.var_valor.set("")
         self.var_vencimento.set(vencimento_padrao().strftime("%d/%m/%Y"))
@@ -1644,6 +1729,12 @@ class AppGNRE:
         if not numero:
             return chave
         return f"CT-e nº {numero} · série {serie}"
+
+    @staticmethod
+    def _rotulo_cte(dados: DadosCTe) -> str:
+        if not dados.serie:
+            return str(dados.numero)
+        return f"{dados.numero} · série {dados.serie}"
 
     def _linha_chave(self, item: dict) -> None:
         if not self.lista_chaves.exists(item["chave"]):
@@ -1931,10 +2022,12 @@ class AppGNRE:
     def _procurar_pdf(self) -> None:
         escolhido = filedialog.askopenfilename(
             title="Selecionar o DACTE em PDF",
+            initialdir=self._pasta_dialogo("pasta_pdf") or None,
             filetypes=[("Arquivos PDF", "*.pdf"), ("Todos os arquivos", "*.*")],
         )
         if not escolhido:
             return
+        self._lembrar_pasta("pasta_pdf", escolhido)
         self.var_pdf.set(escolhido)
         self._ler_pdf()
 
@@ -1957,19 +2050,23 @@ class AppGNRE:
         self._entrada_por_chave(chave)
 
     def _procurar(self) -> None:
+        inicial = self._pasta_dialogo("pasta_xml", DADOS_DIR / "xmls") or None
         if self._modo_varias():
             arquivos = filedialog.askopenfilenames(
                 title="Selecionar XMLs do CT-e (mesmo estado)",
+                initialdir=inicial,
                 filetypes=[("Arquivos XML", "*.xml"), ("Todos os arquivos", "*.*")],
             )
         else:
             escolhido = filedialog.askopenfilename(
                 title="Selecionar XML do CT-e",
+                initialdir=inicial,
                 filetypes=[("Arquivos XML", "*.xml"), ("Todos os arquivos", "*.*")],
             )
             arquivos = (escolhido,) if escolhido else ()
         if not arquivos:
             return
+        self._lembrar_pasta("pasta_xml", arquivos[0])
         self._resetar_selecao()
         caminhos = [str(Path(arquivo).resolve()) for arquivo in arquivos]
         if len(caminhos) == 1:
@@ -2024,6 +2121,7 @@ class AppGNRE:
         self.arquivos_lidos = {}
         self.dados = None
         self.arquivo_lido = None
+        self.var_cte.set("")
         self.var_uf.set("")
         self.var_valor.set("")
         self._atualizar_selecao()
@@ -2075,6 +2173,9 @@ class AppGNRE:
         self.arquivos_lidos = lidos
         self.arquivo_lido, self.dados = next(iter(lidos.items()))
         uf_comum = next(iter(ufs), "")
+        self.var_cte.set(
+            f"{len(lidos)} CT-es" if lote else self._rotulo_cte(self.dados)
+        )
         self.var_uf.set(uf_comum)
         self.var_valor.set(self._rotulo_valor(lidos))
         venc = vencimento_padrao(uf_comum or None)
@@ -2203,6 +2304,7 @@ class AppGNRE:
                 return
         elif lido:
             self.var_uf.set(self.dados.uf_favorecida)
+            self.var_cte.set(self._rotulo_cte(self.dados))
 
         uf_efetiva = (self.dados.uf_favorecida if lido else None) or uf
         via_portal = bool(portal_guia and portal_guia.usa_portal(uf_efetiva))
@@ -2330,6 +2432,7 @@ class AppGNRE:
         uf = next(iter(ufs))
         venc = vencimento_padrao(uf)
         hoje = date.today()
+        self.var_cte.set(f"{len(caminhos)} CT-es")
         self.var_uf.set(uf)
         self.var_vencimento.set(venc.strftime("%d/%m/%Y"))
         self.var_pagamento.set(hoje.strftime("%d/%m/%Y"))
@@ -2515,6 +2618,20 @@ class AppGNRE:
             self.fila.put(("log", f"ERRO: guia {item['numero']} — UF indisponível."))
             return
         if resultado.numero_recibo:
+            concluido = str((resultado.situacao or {}).get("codigo") or "") in {"402", "403"}
+            if concluido:
+                item["tipo"] = "falha"
+                item["mensagem"] = (
+                    " ".join(resultado.mensagens) or "Guia rejeitada pelo portal."
+                )
+                self.fila.put(
+                    (
+                        "log",
+                        f"ERRO: guia {item['numero']} não emitida — rejeitada pelo "
+                        f"portal (recibo {resultado.numero_recibo}).",
+                    )
+                )
+                return
             item["tipo"] = "pendente"
             item["mensagem"] = f"recibo {resultado.numero_recibo}"
             self.fila.put(
@@ -2902,6 +3019,22 @@ class AppGNRE:
             messagebox.showwarning(
                 "GNRE não emitida — UF indisponível", "\n".join(detalhe)
             )
+        elif (
+            resultado.numero_recibo
+            and resultado.situacao
+            and str(resultado.situacao.get("codigo") or "") in {"402", "403"}
+        ):
+            self.var_status.set(
+                f"Guia não emitida — rejeitada pelo portal (recibo {resultado.numero_recibo})."
+            )
+            detalhe = list(resultado.mensagens) or ["O portal não emitiu a guia."]
+            detalhe.append(f"\nRecibo do lote: {resultado.numero_recibo}.")
+            detalhe.append(
+                "Esse recibo não gerou guia válida: não há guia para pagar nem para baixar. "
+                "Corrija o motivo acima e clique em 'Emitir guia' de novo — o app reenvia "
+                "o lote quando o recibo anterior não gerou guia."
+            )
+            messagebox.showerror("Guia não emitida — rejeitada pelo portal", "\n".join(detalhe))
         elif resultado.numero_recibo and resultado.situacao:
             self.var_status.set(
                 f"Lote recebido — recibo {resultado.numero_recibo}. Ainda em processamento."
@@ -2922,8 +3055,10 @@ class AppGNRE:
             messagebox.showerror(
                 "Emissão pelo portal estadual",
                 mensagem
-                + "\n\nO navegador do robô é oculto por padrão. Se o portal exigir "
-                "captcha, use 'Portal: mostrar navegador' e emita novamente.",
+                + "\n\nO navegador do robô está "
+                + ("visível." if self._portal_visivel else "oculto.")
+                + " Se o portal exigir captcha, ative 'Portal: navegador visível' "
+                "no menu e emita novamente.",
             )
         else:
             self.var_status.set("Falha na emissão. Veja o andamento.")
@@ -3436,12 +3571,14 @@ class DialogoCertificado(Janela):
         arquivo = filedialog.askopenfilename(
             parent=self,
             title="Selecionar certificado e-CNPJ",
+            initialdir=self._pasta_dialogo("pasta_pfx", DADOS_DIR) or None,
             filetypes=[
                 ("Certificado digital", "*.pfx *.p12"),
                 ("Todos os arquivos", "*.*"),
             ],
         )
         if arquivo:
+            self._lembrar_pasta("pasta_pfx", arquivo)
             self.var_pfx.set(arquivo)
 
     def _salvar(self) -> None:

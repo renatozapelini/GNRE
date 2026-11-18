@@ -242,5 +242,37 @@
         "2.00"
       ]
     }
+  },
+  "RJ": {
+    "receita": "100030",
+    "detalhamento": "000086",
+    "documento_tipo_preferido": null,
+    "campos_extras": {},
+    "campos_extras_producao": {},
+    "convenio": null,
+    "fallback": {
+      "uf": "RJ",
+      "receita": "100030",
+      "descricao": "ICMS Transporte",
+      "exige_documento_origem": false,
+      "exige_detalhamento": true,
+      "exige_contribuinte_destinatario": false,
+      "exige_data_vencimento": true,
+      "exige_data_pagamento": true,
+      "exige_convenio": false,
+      "exige_periodo_referencia": true,
+      "exige_parcela": false,
+      "exige_produto": false,
+      "exige_campos_adicionais": true,
+      "valor_exigido": "PO",
+      "tipos_documento": [],
+      "campos_adicionais": [],
+      "tipos_gnre": [
+        "0"
+      ],
+      "versoes_xml": [
+        "2.00"
+      ]
+    }
   }
 }
