@@ -53,6 +53,11 @@ presente, atualiza somente o executável.
   valor a pagar: confira o CT-e e a UF antes de emitir.
 - O programa bloqueia guia divergente do CT-e e protege contra duplicidade
   pela chave do CT-e.
+- O PDF entregue é o oficial do portal sempre que ele está disponível; quando
+  o portal não o entrega, o programa gera a réplica local no mesmo layout.
+  A conferência compara os dados fiscais (valores, datas, CNPJ/CPF, Nº de
+  Controle, receita, linha digitável, UF, código de barras e QR PIX) — fonte
+  ou posição diferentes não bloqueiam a guia.
 
 ## Estrutura
 

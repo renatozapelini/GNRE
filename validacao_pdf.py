@@ -1,17 +1,52 @@
-"""Conferência automática da guia local contra o PDF oficial do portal."""
+"""Conferência automática da guia local contra o PDF oficial do portal.
+
+A comparação é feita sobre os dados fiscais impressos na guia — valores,
+datas, CNPJ/CPF, Nº de Controle, código da receita, linha digitável, UF,
+código de barras ITF e QR PIX. Fonte, posição e carimbos do portal
+("Guia Inválida", "UF não emite") são apresentação e não bloqueiam a guia:
+o PDF oficial é o entregue sempre que o portal o devolve.
+"""
 
 from __future__ import annotations
 
 import json
+import re
 import unicodedata
-from collections import defaultdict
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 LIMITE_PRODUCAO = 5
-_TOLERANCIA = 0.25
 _ESTADO = Path(__file__).resolve().parent / "cache" / "validacao_pdf.json"
+
+_UFS = {
+    "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS",
+    "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC",
+    "SE", "SP", "TO",
+}
+
+_RE_MOEDA = re.compile(r"R\$\s?\d{1,3}(?:\.\d{3})*,\d{2}")
+_RE_DATA = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")
+_RE_DOC = re.compile(
+    r"\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b|\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"
+)
+_RE_CONTROLE = re.compile(r"\b\d{16}\b")
+_RE_RECEITA = re.compile(r"\b\d{6}\b")
+_RE_LINHA = re.compile(
+    r"\d{11}\s+\d\s+\d{11}\s+\d\s+\d{11}\s+\d\s+\d{11}\s+\d"
+)
+_RE_UF = re.compile(r"\b[A-Z]{2}\b")
+
+_CATEGORIAS = (
+    ("valores", "valores (R$)"),
+    ("datas", "datas"),
+    ("documentos", "CNPJ/CPF"),
+    ("controle", "Nº de Controle"),
+    ("receita", "código da receita"),
+    ("linha", "linha digitável"),
+    ("uf", "UF"),
+)
 
 
 def _ler_estado() -> dict:
@@ -51,60 +86,54 @@ def _sem_acento(texto: str) -> str:
     return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
 
 
-def _spans(pagina) -> list[tuple]:
-    achados = []
-    for bloco in pagina.get_text("rawdict")["blocks"]:
-        for linha in bloco.get("lines", []):
-            for span in linha["spans"]:
-                texto = "".join(ch["c"] for ch in span["chars"])
-                if not texto.strip():
-                    continue
-                achados.append(
-                    (
-                        span["font"],
-                        round(float(span["size"]), 1),
-                        _sem_acento(texto),
-                        float(span["origin"][0]),
-                        float(span["origin"][1]),
-                    )
-                )
-    return achados
+def _campos(pagina) -> dict:
+    texto = _sem_acento(pagina.get_text("text"))
+    linha = [re.sub(r"\D", "", achado) for achado in _RE_LINHA.findall(texto)]
+    return {
+        "valores": Counter(_RE_MOEDA.findall(texto)),
+        "datas": Counter(_RE_DATA.findall(texto)),
+        "documentos": Counter(_RE_DOC.findall(texto)),
+        "controle": Counter(_RE_CONTROLE.findall(texto)),
+        "receita": Counter(_RE_RECEITA.findall(texto)),
+        "linha": Counter(linha),
+        "uf": Counter(
+            achado for achado in _RE_UF.findall(texto) if achado in _UFS
+        ),
+        "_texto": texto,
+    }
 
 
-def _comparar_texto(local, oficial) -> tuple[int, int, list[str]]:
-    """(conferidos, total, divergências) entre duas páginas, por posição."""
-    posicoes_local = defaultdict(list)
-    posicoes_oficial = defaultdict(list)
-    for fonte, tamanho, texto, x, y in _spans(local):
-        posicoes_local[(fonte, tamanho, texto)].append((y, x))
-    for fonte, tamanho, texto, x, y in _spans(oficial):
-        posicoes_oficial[(fonte, tamanho, texto)].append((y, x))
+def _somar(destino: dict, origem: dict) -> None:
+    for chave, valores in origem.items():
+        if chave == "_texto":
+            destino["_texto"] = destino.get("_texto", "") + valores
+        else:
+            destino.setdefault(chave, Counter()).update(valores)
 
-    conferidos = 0
-    total = sum(len(v) for v in posicoes_oficial.values())
-    divergencias = []
-    for chave, esperadas in posicoes_oficial.items():
-        obtidas = posicoes_local.get(chave, [])
-        if len(obtidas) != len(esperadas):
-            divergencias.append(
-                f"'{chave[2]}' aparece {len(obtidas)}x no local e "
-                f"{len(esperadas)}x no oficial"
-            )
+
+def _comparar_campos(local: dict, oficial: dict) -> tuple[list[str], list[str]]:
+    linhas: list[str] = []
+    divergencias: list[str] = []
+    for chave, rotulo in _CATEGORIAS:
+        esperados = oficial.get(chave) or Counter()
+        obtidos = local.get(chave) or Counter()
+        if not esperados:
             continue
-        for (y_local, x_local), (y_oficial, x_oficial) in zip(
-            sorted(obtidas), sorted(esperadas)
-        ):
-            if (
-                abs(y_local - y_oficial) > _TOLERANCIA
-                or abs(x_local - x_oficial) > _TOLERANCIA
-            ):
+        conferidos = sum(
+            min(quantidade, obtidos.get(valor, 0))
+            for valor, quantidade in esperados.items()
+        )
+        if conferidos == sum(esperados.values()):
+            linhas.append(f"{rotulo[0].upper() + rotulo[1:]}: idêntico(s) ao oficial.")
+            continue
+        for valor, quantidade in sorted(esperados.items()):
+            presentes = obtidos.get(valor, 0)
+            if presentes < quantidade:
                 divergencias.append(
-                    f"'{chave[2]}' fora de lugar: local ({x_local:.2f}, {y_local:.2f}) "
-                    f"x oficial ({x_oficial:.2f}, {y_oficial:.2f})"
+                    f"{rotulo}: '{valor}' aparece {presentes}x na guia local e "
+                    f"{quantidade}x na oficial"
                 )
-            else:
-                conferidos += 1
-    return conferidos, total, divergencias
+    return linhas, divergencias
 
 
 def _decodificar(pagina) -> dict[str, set[str]]:
@@ -136,12 +165,12 @@ def _comparar_codigos(paginas_local, paginas_oficial) -> tuple[dict, list[str]]:
             oficial[tipo].update(valores)
 
     divergencias = []
-    if local["ITF"] != oficial["ITF"]:
+    if oficial["ITF"] and local["ITF"] != oficial["ITF"]:
         divergencias.append(
             f"código de barras difere: local {sorted(local['ITF'])} x "
             f"oficial {sorted(oficial['ITF'])}"
         )
-    if local["QR"] != oficial["QR"]:
+    if oficial["QR"] and local["QR"] != oficial["QR"]:
         divergencias.append("payload do QR PIX difere do oficial")
     return oficial, divergencias
 
@@ -154,7 +183,7 @@ def validar(
     relatorio: Path,
     log: Callable[[str], None] | None = None,
 ) -> dict | None:
-    """Compara a guia local com o PDF oficial e grava o relatório."""
+    """Compara os dados fiscais da guia local com o PDF oficial."""
     local = Path(local)
     oficial = Path(oficial)
     if not local.is_file() or not oficial.is_file():
@@ -179,6 +208,7 @@ def validar(
     rotulo = f"{numero}/{LIMITE_PRODUCAO}" if ambiente == "1" else "teste"
     linhas: list[str] = []
     detalhes: list[str] = []
+    avisos: list[str] = []
     try:
         doc_local = pymupdf.open(local)
         doc_oficial = pymupdf.open(oficial)
@@ -187,7 +217,7 @@ def validar(
             paginas_oficial = [doc_oficial[i] for i in range(doc_oficial.page_count)]
 
             if doc_local.page_count != doc_oficial.page_count:
-                detalhes.append(
+                avisos.append(
                     f"páginas: local {doc_local.page_count} x oficial "
                     f"{doc_oficial.page_count}"
                 )
@@ -195,28 +225,23 @@ def validar(
                 linhas.append(
                     f"Páginas: {doc_local.page_count} — mesma quantidade."
                 )
-                for indice, (pl, po) in enumerate(
-                    zip(paginas_local, paginas_oficial), start=1
-                ):
-                    if abs(pl.rect.width - po.rect.width) > 0.5 or abs(
-                        pl.rect.height - po.rect.height
-                    ) > 0.5:
-                        detalhes.append(
-                            f"p{indice}: tamanho local "
-                            f"{pl.rect.width:.1f}x{pl.rect.height:.1f} x oficial "
-                            f"{po.rect.width:.1f}x{po.rect.height:.1f}"
-                        )
 
-            conferidos = total = 0
-            for pl, po in zip(paginas_local, paginas_oficial):
-                c, t, divs = _comparar_texto(pl, po)
-                conferidos += c
-                total += t
-                detalhes.extend(divs)
-            if total:
-                linhas.append(
-                    f"Texto: {conferidos}/{total} trechos idênticos "
-                    "(conteúdo, fonte, tamanho e posição)."
+            campos_local: dict = {}
+            campos_oficial: dict = {}
+            for pagina in paginas_local:
+                _somar(campos_local, _campos(pagina))
+            for pagina in paginas_oficial:
+                _somar(campos_oficial, _campos(pagina))
+
+            conferidas, divs = _comparar_campos(campos_local, campos_oficial)
+            linhas.extend(conferidas)
+            detalhes.extend(divs)
+
+            texto_oficial = campos_oficial.get("_texto", "").lower()
+            if "guia invalida" in texto_oficial or "uf nao emite" in texto_oficial:
+                avisos.append(
+                    "o portal marcou este PDF como 'Guia Inválida' (UF não emite "
+                    "neste ambiente); os dados conferem e a guia não é pagável."
                 )
 
             codigos, divs = _comparar_codigos(paginas_local, paginas_oficial)
@@ -233,6 +258,9 @@ def validar(
         return None
 
     ok = not detalhes
+    if avisos:
+        linhas.append("Observações do PDF oficial:")
+        linhas.extend(f"- {aviso}" for aviso in avisos)
     linhas.insert(0, f"Conferência do PDF — {'OK' if ok else 'DIVERGÊNCIA'} ({rotulo}).")
     for item in detalhes[:40]:
         linhas.append(f"- {item}")

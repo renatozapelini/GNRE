@@ -12,7 +12,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
 
-VERSAO = "3.2.0"
+VERSAO = "3.2.1"
 ATALHO = "Emissor de Guias"
 ATALHOS_ANTIGOS = ("Emissor GNRE",)
 PASTA_PROGRAMA = "GNRE"

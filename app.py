@@ -2245,6 +2245,124 @@ class AppGNRE:
                     f"({erro}). Original em {item['destino']}."
                 )
 
+    def _oficializar_lote(self, itens: list[dict]) -> None:
+        """Busca o PDF oficial de cada guia e substitui o PDF entregue."""
+        alvos = []
+        for item in itens:
+            resultado = item.get("resultado")
+            if resultado is None or not item.get("destino"):
+                continue
+            if not resultado.numero_recibo or not resultado.pdf_local:
+                continue
+            if resultado.ambiente not in ("1", "2"):
+                continue
+            alvos.append(item)
+        if alvos:
+            threading.Thread(
+                target=self._baixar_oficiais, args=(alvos,), daemon=True
+            ).start()
+
+    def _baixar_oficiais(self, itens: list[dict]) -> None:
+        # Uma guia por vez: o portal limita consultas e cada download já
+        # faz tentativas próprias.
+        for item in itens:
+            self._baixar_oficial_item(item)
+
+    def _baixar_oficial_item(self, item: dict) -> None:
+        resultado: ResultadoEmissao = item["resultado"]
+        destino = Path(item["destino"])
+        municipio = (
+            resultado.dados.emitente.municipio_nome
+            if resultado.dados and resultado.dados.emitente
+            else ""
+        )
+        for tentativa in range(1, 4):
+            if tentativa > 1:
+                time.sleep(30)
+            self.fila.put(
+                (
+                    "log",
+                    f"Buscando o PDF oficial do CT-e {item['numero']} "
+                    f"(tentativa {tentativa}/3)...",
+                )
+            )
+            try:
+                recuperacao = baixar_pdf_recibo(
+                    resultado.numero_recibo,
+                    config=self.config,
+                    ambiente=resultado.ambiente,
+                    log=lambda mensagem: self.fila.put(("log", mensagem)),
+                    municipio_nome=municipio,
+                    gerar_local=False,
+                    conferir=False,
+                )
+            except Exception as erro:  # noqa: BLE001 - a guia local já está entregue
+                self.fila.put(
+                    (
+                        "log",
+                        f"AVISO: PDF oficial do CT-e {item['numero']} falhou "
+                        f"({type(erro).__name__}: {erro}).",
+                    )
+                )
+                continue
+            oficial = recuperacao.pdf_path
+            if oficial is None:
+                continue
+            aplicado, mensagem = self._aplicar_pdf_oficial(
+                Path(oficial), destino
+            )
+            if aplicado:
+                item["destino"] = str(aplicado)
+                self.fila.put(
+                    (
+                        "log",
+                        f"PDF oficial aplicado na guia do CT-e "
+                        f"{item['numero']}: {aplicado}.",
+                    )
+                )
+            self.fila.put(("log", mensagem))
+            return
+        self.fila.put(
+            (
+                "log",
+                f"AVISO: o portal não entregou o PDF oficial do CT-e "
+                f"{item['numero']}; a guia local (mesmo layout) foi mantida.",
+            )
+        )
+
+    def _aplicar_pdf_oficial(
+        self, oficial: Path, destino: Path
+    ) -> tuple[Path | None, str]:
+        """Copia o PDF oficial sobre o entregue, tolerando arquivo aberto."""
+        if oficial.resolve() == destino.resolve():
+            return destino, f"PDF oficial confirmado em {destino}."
+        for tentativa in range(1, 6):
+            try:
+                shutil.copy2(oficial, destino)
+                return destino, f"PDF oficial aplicado: {destino}."
+            except PermissionError:
+                if tentativa < 5:
+                    time.sleep(1.2)
+            except OSError as erro:
+                return None, (
+                    f"AVISO: PDF oficial disponível em {oficial}; não copiei "
+                    f"para {destino} ({erro})."
+                )
+        alternativo = destino.with_name(
+            f"{destino.stem} (oficial){destino.suffix}"
+        )
+        try:
+            shutil.copy2(oficial, alternativo)
+            return alternativo, (
+                f"A guia estava aberta; o PDF oficial foi salvo em "
+                f"{alternativo}."
+            )
+        except OSError as erro:
+            return None, (
+                f"AVISO: PDF oficial disponível em {oficial}; não copiei "
+                f"({erro})."
+            )
+
     # ------------------------------------------------------------------
     # fila e finalização
     # ------------------------------------------------------------------
@@ -2478,6 +2596,7 @@ class AppGNRE:
         emitidas = [item for item in resumo if item["tipo"] == "ok"]
         if emitidas:
             self._salvar_pdfs_do_lote(emitidas)
+            self._oficializar_lote(emitidas)
         com_pdf = [item for item in emitidas if item["destino"]]
         sem_pdf = [
             item
@@ -2682,19 +2801,13 @@ class AppGNRE:
                 return
         if silencioso:
             alvo = Path(resultado.pdf_path) if resultado.pdf_path else None
-            if (
-                alvo
-                and alvo.exists()
-                and alvo.resolve() != Path(caminho).resolve()
-            ):
-                try:
-                    shutil.copy2(caminho, alvo)
-                    self._log(f"PDF oficial aplicado na guia entregue: {alvo}.")
-                except OSError as erro:
-                    self._log(
-                        f"AVISO: PDF oficial disponível em {caminho}; não substituí "
-                        f"{alvo} ({erro})."
-                    )
+            if alvo and alvo.exists():
+                aplicado, mensagem = self._aplicar_pdf_oficial(
+                    Path(caminho), alvo
+                )
+                if aplicado:
+                    resultado.pdf_path = aplicado
+                self._log(mensagem)
             else:
                 self._log(f"PDF oficial confirmado em {caminho}.")
             return

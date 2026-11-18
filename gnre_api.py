@@ -2397,6 +2397,7 @@ def baixar_pdf_recibo(
     log: Callable[[str], None] | None = None,
     municipio_nome: str = "",
     gerar_local: bool = True,
+    conferir: bool = True,
 ) -> ResultadoEmissao:
     """Consulta um recibo já recebido e grava o PDF, sem reenviar o lote."""
     if config is None:
@@ -2477,9 +2478,10 @@ def baixar_pdf_recibo(
                     config.pasta_saida / f"{base}_guia.pdf", pdf
                 )
                 registrar(f"PDF da guia gravado em {resultado.pdf_path}.")
-                _conferir_pdf_local(
-                    resultado, base, config, municipio_nome, registrar
-                )
+                if conferir:
+                    _conferir_pdf_local(
+                        resultado, base, config, municipio_nome, registrar
+                    )
             else:
                 resultado.avisos.append(
                     "O portal não retornou pdfGuias nesta consulta; tente novamente "
