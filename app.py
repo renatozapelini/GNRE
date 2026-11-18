@@ -12,6 +12,7 @@ import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
+import webbrowser
 from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -22,6 +23,14 @@ from ttkbootstrap.style import ThemeDefinition
 from calendario import vencimento_padrao
 from certificado import carregar_certificado
 from consulta_cte import DistribuicaoCTe
+from edocs import (
+    URL_PADRAO as EDOCS_URL,
+    PortalEdocs,
+    carregar_conta,
+    numero_e_serie_da_chave,
+    remover_conta,
+    salvar_conta,
+)
 from gnre_api import (
     ClienteGNRE,
     ConfigGNRE,
@@ -302,7 +311,7 @@ class AppGNRE:
         self._lote_info: tuple[int, int] | None = None
         self._lateral_aberta = False
         self._portal_visivel = False
-        self.modo_entrada = "xml"
+        self.modo_entrada = "numero"
         self.chaves: list[dict] = []
         self.xml_dir = DADOS_DIR / "xmls"
         self._ultima_distribuicao = 0.0
@@ -314,6 +323,7 @@ class AppGNRE:
 
         self.var_arquivo = tk.StringVar()
         self.var_chave = tk.StringVar()
+        self.var_pdf = tk.StringVar()
         self.var_modo = tk.StringVar(value="unica")
         self.var_uf = tk.StringVar()
         self.var_valor = tk.StringVar()
@@ -372,27 +382,34 @@ class AppGNRE:
         ).pack(anchor="w", pady=(1, 0))
 
         cartao_cte = self._cartao(
-            moldura, "CT-e autorizado", "selecione o XML ou informe a chave"
+            moldura, "CT-e autorizado", "informe o número, o XML ou o PDF"
         )
         linha_abas = Quadro(cartao_cte, bg=CARTAO)
         linha_abas.pack(fill="x", pady=(0, 5))
+        self.btn_aba_numero = ttk.Button(
+            linha_abas,
+            text="Número do CT-e",
+            style="AbaAtiva.TButton",
+            command=lambda: self._trocar_aba("numero"),
+        )
+        self.btn_aba_numero.pack(side="left")
         self.btn_aba_xml = ttk.Button(
             linha_abas,
             text="XML",
-            style="AbaAtiva.TButton",
+            style="Aba.TButton",
             command=lambda: self._trocar_aba("xml"),
         )
-        self.btn_aba_xml.pack(side="left")
-        self.btn_aba_chave = ttk.Button(
+        self.btn_aba_xml.pack(side="left", padx=(4, 0))
+        self.btn_aba_pdf = ttk.Button(
             linha_abas,
-            text="Chave do CT-e",
+            text="PDF",
             style="Aba.TButton",
-            command=lambda: self._trocar_aba("chave"),
+            command=lambda: self._trocar_aba("pdf"),
         )
-        self.btn_aba_chave.pack(side="left", padx=(4, 0))
+        self.btn_aba_pdf.pack(side="left", padx=(4, 0))
         self.legenda_aba = Rotulo(
             linha_abas,
-            text="Selecione o XML autorizado.",
+            text="Informe o número do CT-e autorizado.",
             bg=CARTAO,
             fg=TEXTO_SUAVE,
             font=(self.fonte, 8),
@@ -419,57 +436,37 @@ class AppGNRE:
             bootstyle="primary",
         ).pack(side="left", padx=(14, 0))
 
-        self.painel_xml = Quadro(cartao_cte, bg=CARTAO)
-        self.painel_xml.pack(fill="x")
-        linha_cte = Quadro(self.painel_xml, bg=CARTAO)
-        linha_cte.pack(fill="x")
-        self.entrada_arquivo = ttkb.Entry(
-            linha_cte, textvariable=self.var_arquivo, style="Campo.TEntry"
+        self.painel_numero = Quadro(cartao_cte, bg=CARTAO)
+        self.painel_numero.pack(fill="x")
+        linha_numero = Quadro(self.painel_numero, bg=CARTAO)
+        linha_numero.pack(fill="x")
+        self.entrada_numero = ttkb.Entry(
+            linha_numero, textvariable=self.var_chave, style="Campo.TEntry"
         )
-        self.entrada_arquivo.pack(side="left", fill="x", expand=True)
-        self.entrada_arquivo.bind("<Return>", lambda _evento: self._ler_cte())
-        ttkb.Button(
-            linha_cte,
-            text="Procurar",
-            bootstyle="secondary",
-            command=self._procurar,
-        ).pack(side="left", padx=(8, 0))
-        ttkb.Button(
-            linha_cte,
-            text="Ler e conferir",
-            bootstyle="secondary",
-            command=self._ler_cte,
-        ).pack(side="left", padx=(8, 0))
-
-        self.painel_chave = Quadro(cartao_cte, bg=CARTAO)
-        linha_chave = Quadro(self.painel_chave, bg=CARTAO)
-        linha_chave.pack(fill="x")
-        self.entrada_chave = ttkb.Entry(
-            linha_chave, textvariable=self.var_chave, style="Campo.TEntry"
+        self.entrada_numero.pack(side="left", fill="x", expand=True)
+        self.entrada_numero.bind(
+            "<Return>", lambda _evento: self._adicionar_numero()
         )
-        self.entrada_chave.pack(side="left", fill="x", expand=True)
-        self.entrada_chave.bind("<Return>", lambda _evento: self._adicionar_chave())
         ttkb.Button(
-            linha_chave,
+            linha_numero,
             text="Adicionar",
             bootstyle="secondary",
-            command=self._adicionar_chave,
+            command=self._adicionar_numero,
         ).pack(side="left", padx=(8, 0))
         ttkb.Button(
-            linha_chave,
+            linha_numero,
             text="Remover",
             bootstyle="secondary",
             command=self._remover_chave,
         ).pack(side="left", padx=(4, 0))
         ttkb.Button(
-            linha_chave,
+            linha_numero,
             text="Limpar",
             bootstyle="secondary",
             command=self._limpar_chaves,
         ).pack(side="left", padx=(4, 0))
 
-        caixa_lista = Quadro(self.painel_chave, bg=CARTAO)
-        caixa_lista.pack(fill="x", pady=(5, 0))
+        caixa_lista = Quadro(self.painel_numero, bg=CARTAO)
         self.caixa_lista = caixa_lista
         self.lista_chaves = ttk.Treeview(
             caixa_lista,
@@ -490,6 +487,48 @@ class AppGNRE:
         self.lista_chaves.tag_configure("pendente", foreground=ALERTA)
         self.lista_chaves.tag_configure("pronto", foreground=SUCESSO)
         self.lista_chaves.tag_configure("erro", foreground=PERIGO)
+
+        self.painel_xml = Quadro(cartao_cte, bg=CARTAO)
+        linha_cte = Quadro(self.painel_xml, bg=CARTAO)
+        linha_cte.pack(fill="x")
+        self.entrada_arquivo = ttkb.Entry(
+            linha_cte, textvariable=self.var_arquivo, style="Campo.TEntry"
+        )
+        self.entrada_arquivo.pack(side="left", fill="x", expand=True)
+        self.entrada_arquivo.bind("<Return>", lambda _evento: self._ler_cte())
+        ttkb.Button(
+            linha_cte,
+            text="Procurar",
+            bootstyle="secondary",
+            command=self._procurar,
+        ).pack(side="left", padx=(8, 0))
+        ttkb.Button(
+            linha_cte,
+            text="Ler e conferir",
+            bootstyle="secondary",
+            command=self._ler_cte,
+        ).pack(side="left", padx=(8, 0))
+
+        self.painel_pdf = Quadro(cartao_cte, bg=CARTAO)
+        linha_pdf = Quadro(self.painel_pdf, bg=CARTAO)
+        linha_pdf.pack(fill="x")
+        self.entrada_pdf = ttkb.Entry(
+            linha_pdf, textvariable=self.var_pdf, style="Campo.TEntry"
+        )
+        self.entrada_pdf.pack(side="left", fill="x", expand=True)
+        self.entrada_pdf.bind("<Return>", lambda _evento: self._ler_pdf())
+        ttkb.Button(
+            linha_pdf,
+            text="Procurar",
+            bootstyle="secondary",
+            command=self._procurar_pdf,
+        ).pack(side="left", padx=(8, 0))
+        ttkb.Button(
+            linha_pdf,
+            text="Ler e conferir",
+            bootstyle="secondary",
+            command=self._ler_pdf,
+        ).pack(side="left", padx=(8, 0))
 
         cartao_dados = self._cartao(
             moldura, "Dados da guia", "confira antes de emitir"
@@ -927,13 +966,17 @@ class AppGNRE:
         self._item_lateral(conteudo, "Nova guia", self._focar_cte, ativo=True)
         self._item_lateral(conteudo, "Lote de XMLs", self._abrir_lote)
         self._item_lateral(
-            conteudo, "Chave do CT-e", lambda: self._trocar_aba("chave")
+            conteudo, "Número do CT-e", lambda: self._trocar_aba("numero")
+        )
+        self._item_lateral(
+            conteudo, "Consulta do CT-e no portal", self._abrir_consulta_cte
         )
 
         self._grupo_lateral(conteudo, "SISTEMA")
         self._item_lateral(
             conteudo, "Certificado digital", self._atualizar_certificado
         )
+        self._item_lateral(conteudo, "Conta do portal Edocs", self._configurar_edocs)
         self._item_lateral(conteudo, "Pasta das guias", self._abrir_pasta_guias)
         self._item_lateral(conteudo, "Pasta de configuração", self._abrir_pasta_config)
         self._item_lateral(conteudo, "Verificar atualização", self._verificar_atualizacao)
@@ -1064,10 +1107,43 @@ class AppGNRE:
         return item
 
     def _focar_cte(self) -> None:
-        if self.modo_entrada == "chave":
-            self.entrada_chave.focus_set()
+        if self.modo_entrada == "numero":
+            self.entrada_numero.focus_set()
+        elif self.modo_entrada == "pdf":
+            self.entrada_pdf.focus_set()
         else:
             self.entrada_arquivo.focus_set()
+
+    def _abrir_consulta_cte(self) -> None:
+        """Abre o portal do CT-e com a chave copiada para o usuário baixar o XML."""
+        chave = re.sub(r"\D", "", self.var_chave.get())
+        if len(chave) != 44 and self.chaves:
+            chave = self.chaves[-1]["chave"]
+        endereco = (
+            "https://www.cte.fazenda.gov.br/portal/"
+            "consultaRecaptcha.aspx?tipoConsulta=complet"
+        )
+        if chave:
+            try:
+                validar_chave(chave)
+            except Exception as erro:
+                messagebox.showwarning("Chave inválida", str(erro))
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(chave)
+            self._log(
+                f"Chave {self._formatar_chave(chave)} copiada para a área de "
+                "transferência."
+            )
+        if not webbrowser.open(endereco):
+            messagebox.showerror(
+                "Portal do CT-e", "Não foi possível abrir o navegador."
+            )
+            return
+        self._log(
+            "Portal do CT-e aberto: cole a chave, resolva o captcha e baixe o "
+            "XML com o certificado. Depois selecione o XML na aba XML."
+        )
 
     def _abrir_pasta_guias(self) -> None:
         pasta = Path(self.config.pasta_saida) if self.config else DADOS_DIR / "guias"
@@ -1398,10 +1474,13 @@ class AppGNRE:
             self._log(f"AVISO: {aviso}")
         if not self.em_execucao:
             self.btn_emitir.configure(state="normal")
-        self.var_status.set("Pronto. Selecione o XML do CT-e.")
+        self.var_status.set("Pronto. Informe o número do CT-e, o XML ou o PDF.")
 
     def _atualizar_certificado(self) -> None:
         DialogoCertificado(self.root, self)
+
+    def _configurar_edocs(self) -> None:
+        DialogoEdocs(self.root, self)
 
     def _bloquear(self, motivo: str) -> None:
         self.btn_emitir.configure(state="disabled")
@@ -1412,7 +1491,7 @@ class AppGNRE:
     # ------------------------------------------------------------------
 
     def _caminhos_selecionados(self) -> list[str]:
-        if self.modo_entrada == "chave":
+        if self.modo_entrada == "numero":
             return [
                 item["caminho"]
                 for item in self.chaves
@@ -1437,27 +1516,34 @@ class AppGNRE:
 
     def _trocar_aba(self, modo: str) -> None:
         if modo == self.modo_entrada:
+            self._focar_cte()
             return
         self.modo_entrada = modo
-        if modo == "chave":
-            self.painel_xml.pack_forget()
-            self.painel_chave.pack(fill="x")
-            self.btn_aba_chave.configure(style="AbaAtiva.TButton")
-            self.btn_aba_xml.configure(style="Aba.TButton")
-            self.legenda_aba.configure(text="O XML é baixado pela chave na SEFAZ.")
-            self.entrada_chave.focus_set()
+        for painel in (self.painel_numero, self.painel_xml, self.painel_pdf):
+            painel.pack_forget()
+        for botao in (self.btn_aba_numero, self.btn_aba_xml, self.btn_aba_pdf):
+            botao.configure(style="Aba.TButton")
+        if modo == "numero":
+            self.painel_numero.pack(fill="x")
+            self.btn_aba_numero.configure(style="AbaAtiva.TButton")
+            self.legenda_aba.configure(text="Informe o número do CT-e autorizado.")
             self.var_status.set(
-                "Informe a chave do CT-e. O XML é baixado pela distribuição da SEFAZ."
+                "Informe o número do CT-e. O XML é baixado no portal Edocs."
+            )
+        elif modo == "pdf":
+            self.painel_pdf.pack(fill="x")
+            self.btn_aba_pdf.configure(style="AbaAtiva.TButton")
+            self.legenda_aba.configure(text="Selecione o DACTE em PDF.")
+            self.var_status.set(
+                "Selecione o PDF do DACTE: a chave do CT-e é lida do documento."
             )
         else:
-            self.painel_chave.pack_forget()
             self.painel_xml.pack(fill="x")
             self.btn_aba_xml.configure(style="AbaAtiva.TButton")
-            self.btn_aba_chave.configure(style="Aba.TButton")
             self.legenda_aba.configure(text="Selecione o XML autorizado.")
-            self.entrada_arquivo.focus_set()
             self.var_status.set("Selecione o XML do CT-e.")
         self._limpar_leitura()
+        self._focar_cte()
 
     @staticmethod
     def _formatar_chave(chave: str) -> str:
@@ -1500,22 +1586,29 @@ class AppGNRE:
     def _mudar_modo(self) -> None:
         self._limpar_leitura()
         self._ajustar_lista_chaves()
-        if self.modo_entrada == "chave":
+        if self.modo_entrada == "numero":
             if self._modo_varias():
                 self.var_status.set(
-                    "Modo várias GNRE: adicione as chaves do mesmo estado."
+                    "Modo várias GNRE: adicione os números dos CT-es do mesmo estado."
                 )
             else:
-                self.var_status.set("Modo GNRE única: adicione a chave do CT-e.")
+                self.var_status.set("Modo GNRE única: informe o número do CT-e.")
+        elif self.modo_entrada == "pdf":
+            self.var_status.set("Selecione o PDF do DACTE do CT-e.")
         elif self._modo_varias():
             self.var_status.set("Modo várias GNRE: selecione XMLs do mesmo estado.")
         else:
             self.var_status.set("Modo GNRE única: selecione um XML do CT-e.")
 
     def _ajustar_lista_chaves(self) -> None:
-        """Na GNRE única a lista mostra uma linha; várias guias mostram a fila."""
-        self.lista_chaves.configure(height=2 if self._modo_varias() else 1)
-        if self._modo_varias() or len(self.chaves) <= 1:
+        """A lista só aparece no modo várias; na GNRE única fica oculta."""
+        if self._modo_varias():
+            self.lista_chaves.configure(height=2)
+            self.caixa_lista.pack(fill="x", pady=(5, 0))
+            return
+        self.caixa_lista.pack_forget()
+        self.lista_chaves.configure(height=1)
+        if len(self.chaves) <= 1:
             return
         ultima = self.chaves[-1]
         for chave in list(self.lista_chaves.get_children()):
@@ -1536,18 +1629,28 @@ class AppGNRE:
         self._procurar()
 
     # ------------------------------------------------------------------
-    # entrada por chave do CT-e
+    # entrada por número (ou chave) do CT-e
     # ------------------------------------------------------------------
 
     def _item_chave(self, chave: str) -> dict | None:
         return next((item for item in self.chaves if item["chave"] == chave), None)
+
+    @staticmethod
+    def _rotulo_chave(chave: str) -> str:
+        try:
+            numero, serie = numero_e_serie_da_chave(chave)
+        except Exception:
+            return chave
+        if not numero:
+            return chave
+        return f"CT-e nº {numero} · série {serie}"
 
     def _linha_chave(self, item: dict) -> None:
         if not self.lista_chaves.exists(item["chave"]):
             return
         self.lista_chaves.item(
             item["chave"],
-            values=(self._formatar_chave(item["chave"]), item["situacao"]),
+            values=(self._rotulo_chave(item["chave"]), item["situacao"]),
             tags=(item["tag"],),
         )
 
@@ -1559,11 +1662,28 @@ class AppGNRE:
         item["tag"] = tag
         self._linha_chave(item)
 
-    def _adicionar_chave(self) -> None:
-        chave = re.sub(r"\D", "", self.var_chave.get())
-        if not chave:
+    def _adicionar_numero(self) -> None:
+        """Aceita só o número do CT-e (até 9 dígitos) ou a chave completa."""
+        texto = re.sub(r"\D", "", self.var_chave.get())
+        if not texto:
             return
         self.var_chave.set("")
+        if len(texto) == 44:
+            self._entrada_por_chave(texto)
+            return
+        if len(texto) > 9:
+            messagebox.showwarning(
+                "Número inválido",
+                "Informe apenas o número do CT-e (até 9 dígitos). Se preferir, "
+                "cole a chave completa com 44 dígitos.",
+            )
+            self.var_status.set(
+                "Número inválido: use só o número do CT-e ou a chave de 44 dígitos."
+            )
+            return
+        self._buscar_numero(texto)
+
+    def _entrada_por_chave(self, chave: str) -> None:
         try:
             validar_chave(chave)
         except Exception as erro:
@@ -1571,16 +1691,16 @@ class AppGNRE:
             self.var_status.set("Chave inválida. Confira os 44 dígitos.")
             return
         if self._item_chave(chave) is not None:
-            messagebox.showinfo("Chave repetida", "Esta chave já está na lista.")
+            messagebox.showinfo("CT-e repetido", "Este CT-e já está na lista.")
             return
-        if self.modo_entrada != "chave":
-            self._trocar_aba("chave")
+        if self.modo_entrada != "numero":
+            self._trocar_aba("numero")
         if not self._modo_varias() and self.chaves:
             for antiga in list(self.lista_chaves.get_children()):
                 self.lista_chaves.delete(antiga)
             self.chaves = []
             self._limpar_leitura()
-            self._log("Modo GNRE única: a chave anterior foi substituída.")
+            self._log("Modo GNRE única: o CT-e anterior foi substituído.")
         item = {
             "chave": chave,
             "situacao": "Aguardando o XML...",
@@ -1592,19 +1712,116 @@ class AppGNRE:
         self.chaves.append(item)
         self.lista_chaves.insert(
             "", "end", iid=chave,
-            values=(self._formatar_chave(chave), item["situacao"]),
+            values=(self._rotulo_chave(chave), item["situacao"]),
             tags=("pendente",),
         )
         self.lista_chaves.see(chave)
-        self._log(f"Chave adicionada: {self._formatar_chave(chave)}")
-        self.var_status.set("Baixando o XML do CT-e pela chave...")
+        self._ajustar_lista_chaves()
+        self._log(f"CT-e adicionado: {self._rotulo_chave(chave)}")
+        self.var_status.set("Baixando o XML do CT-e...")
         self._fila_chaves.put(chave)
+
+    def _buscar_numero(self, numero: str) -> None:
+        """Entrada só com o número do CT-e: resolve no Edocs e baixa o XML."""
+        numero = numero.lstrip("0") or "0"
+        if carregar_conta(DADOS_DIR) is None:
+            messagebox.showinfo(
+                "Conta do portal Edocs",
+                "Para buscar pelo número do CT-e, cadastre a conta do portal "
+                "Edocs no menu → Conta do portal Edocs.",
+            )
+            self.var_status.set("Cadastre a conta do Edocs para buscar pelo número.")
+            return
+        if self.modo_entrada != "numero":
+            self._trocar_aba("numero")
+        self.var_status.set(f"Localizando o CT-e nº {numero} no Edocs...")
+        self._log(f"Buscando o CT-e nº {numero} no portal Edocs...")
+        self._fila_chaves.put(("numero", numero))
+
+    def _resolver_numero(self, numero: str) -> None:
+        conta = carregar_conta(DADOS_DIR)
+        if conta is None:
+            self.fila.put(
+                (
+                    "numero_erro",
+                    (numero, "A conta do portal Edocs não está cadastrada."),
+                )
+            )
+            return
+        try:
+            with PortalEdocs(
+                conta, log=lambda mensagem: self.fila.put(("log", mensagem))
+            ) as portal:
+                chave, caminho = portal.obter(numero, self.xml_dir)
+        except Exception as erro:
+            self.fila.put(("numero_erro", (numero, f"{erro}")))
+            return
+        self.fila.put(("numero_ok", (numero, chave, str(caminho))))
+
+    def _chave_do_numero(self, numero: str, chave: str, caminho: str) -> None:
+        if self._item_chave(chave) is None:
+            if not self._modo_varias() and self.chaves:
+                for antiga in list(self.lista_chaves.get_children()):
+                    self.lista_chaves.delete(antiga)
+                self.chaves = []
+                self._limpar_leitura()
+            item = {
+                "chave": chave,
+                "situacao": "XML pronto",
+                "tag": "pronto",
+                "caminho": caminho,
+                "erro": None,
+                "ambiente": self.var_ambiente.get(),
+            }
+            self.chaves.append(item)
+            self.lista_chaves.insert(
+                "", "end", iid=chave,
+                values=(self._rotulo_chave(chave), item["situacao"]),
+                tags=("pronto",),
+            )
+            self.lista_chaves.see(chave)
+            self._ajustar_lista_chaves()
+            self._log(
+                f"CT-e nº {numero} localizado no Edocs: "
+                f"{self._formatar_chave(chave)}"
+            )
+        item = self._item_chave(chave)
+        if item is not None:
+            item["caminho"] = caminho
+            item["erro"] = None
+        self._definir_situacao(chave, "XML pronto", "pronto")
+        self.var_status.set("CT-e localizado no Edocs. Lendo os dados da guia...")
+        self._ler_cte(avisar=False)
+
+    def _baixar_do_edocs(self, chave: str) -> str | None:
+        conta = carregar_conta(DADOS_DIR)
+        if conta is None:
+            return None
+        self.fila.put(
+            (
+                "log",
+                "XML não está na distribuição da SEFAZ; procurando no portal Edocs...",
+            )
+        )
+        try:
+            with PortalEdocs(
+                conta, log=lambda mensagem: self.fila.put(("log", mensagem))
+            ) as portal:
+                _, caminho = portal.obter_por_chave(chave, self.xml_dir)
+        except Exception as erro:
+            self.fila.put(("log", f"Edocs: {erro}"))
+            return None
+        return str(caminho)
 
     def _baixar_chaves(self) -> None:
         while True:
-            chave = self._fila_chaves.get()
-            if chave is None:
+            pedido = self._fila_chaves.get()
+            if pedido is None:
                 return
+            if isinstance(pedido, tuple):
+                self._resolver_numero(pedido[1])
+                continue
+            chave = pedido
             item = self._item_chave(chave)
             if item is None:
                 continue
@@ -1620,27 +1837,43 @@ class AppGNRE:
                 continue
             self.fila.put(("chave_situacao", (chave, "Consultando a SEFAZ...")))
             config = self.config
-            try:
-                with DistribuicaoCTe(
-                    cert,
-                    self.xml_dir,
-                    ambiente=item["ambiente"],
-                    uf_autor=config.uf_autor if config is not None else "42",
-                    timeout=config.timeout if config is not None else 60,
-                    verificar_ssl=config.verificar_ssl if config is not None else True,
-                    log=lambda mensagem: self.fila.put(("log", mensagem)),
-                ) as cliente:
-                    caminho = cliente.obter(chave)
-                self._ultima_distribuicao = time.monotonic()
+            # O CT-e é documento de produção mesmo quando a GNRE é emitida em
+            # homologação; a homologação só entra como segunda tentativa.
+            ambientes = ["1"] + (["2"] if item["ambiente"] != "1" else [])
+            caminho = None
+            falhas: dict[str, str] = {}
+            for ambiente in ambientes:
+                if ambiente == "2":
+                    self.fila.put(
+                        ("log", "CT-e não está em produção; consultando a homologação.")
+                    )
+                try:
+                    with DistribuicaoCTe(
+                        cert,
+                        self.xml_dir,
+                        ambiente=ambiente,
+                        uf_autor=config.uf_autor if config is not None else "42",
+                        timeout=config.timeout if config is not None else 60,
+                        verificar_ssl=config.verificar_ssl if config is not None else True,
+                        log=lambda mensagem: self.fila.put(("log", mensagem)),
+                    ) as cliente:
+                        caminho = cliente.obter(chave)
+                    break
+                except Exception as erro:
+                    falhas[ambiente] = f"{erro}"
+            self._ultima_distribuicao = time.monotonic()
+            if caminho is None:
+                caminho = self._baixar_do_edocs(chave)
+            if caminho is not None:
                 self.fila.put(("chave_pronta", (chave, str(caminho))))
-            except Exception as erro:
-                self._ultima_distribuicao = time.monotonic()
-                self.fila.put(("chave_erro", (chave, f"{erro}")))
+            else:
+                mensagem = falhas.get("1") or next(iter(falhas.values()))
+                self.fila.put(("chave_erro", (chave, mensagem)))
 
     def _remover_chave(self) -> None:
         selecao = self.lista_chaves.selection()
         if not selecao:
-            messagebox.showwarning("Aviso", "Selecione a chave que deseja remover.")
+            messagebox.showwarning("Aviso", "Selecione o CT-e que deseja remover.")
             return
         chave = selecao[0]
         self.lista_chaves.delete(chave)
@@ -1649,14 +1882,79 @@ class AppGNRE:
             self._ler_cte(avisar=False)
         else:
             self._limpar_leitura()
-            self.var_status.set("Nenhuma chave selecionada.")
+            self.var_status.set("Nenhum CT-e selecionado.")
 
     def _limpar_chaves(self) -> None:
         for chave in list(self.lista_chaves.get_children()):
             self.lista_chaves.delete(chave)
         self.chaves = []
         self._limpar_leitura()
-        self.var_status.set("Lista de chaves limpa.")
+        self.var_status.set("Lista de CT-es limpa.")
+
+    @staticmethod
+    def _chave_do_dacte(caminho: Path) -> str:
+        """Lê a chave do CT-e impressa no DACTE (modelo 57)."""
+        try:
+            from pypdf import PdfReader
+        except ImportError as erro:
+            raise RuntimeError(
+                "Leitura de PDF indisponível neste computador. "
+                "Use a aba Número do CT-e."
+            ) from erro
+        try:
+            leitor = PdfReader(str(caminho))
+            texto = "\n".join(
+                pagina.extract_text() or "" for pagina in leitor.pages[:3]
+            )
+        except Exception as erro:
+            raise RuntimeError(f"PDF ilegível: {erro}") from erro
+
+        candidatas: list[str] = []
+        for bruto in re.findall(r"\d(?:[ -]?\d){43,79}", texto):
+            digitos = re.sub(r"\D", "", bruto)
+            for inicio in range(len(digitos) - 43):
+                chave = digitos[inicio : inicio + 44]
+                if chave[20:22] != "57" or chave in candidatas:
+                    continue
+                try:
+                    validar_chave(chave)
+                except Exception:
+                    continue
+                candidatas.append(chave)
+        if candidatas:
+            return candidatas[0]
+        raise RuntimeError(
+            "Não encontrei a chave do CT-e neste PDF. Confira se é o DACTE e, "
+            "se o arquivo for digitalizado sem texto, use a aba Número do CT-e."
+        )
+
+    def _procurar_pdf(self) -> None:
+        escolhido = filedialog.askopenfilename(
+            title="Selecionar o DACTE em PDF",
+            filetypes=[("Arquivos PDF", "*.pdf"), ("Todos os arquivos", "*.*")],
+        )
+        if not escolhido:
+            return
+        self.var_pdf.set(escolhido)
+        self._ler_pdf()
+
+    def _ler_pdf(self) -> None:
+        caminho = Path(self.var_pdf.get().strip().strip('"'))
+        if not caminho.is_file():
+            messagebox.showwarning("PDF", "Selecione o PDF do DACTE do CT-e.")
+            return
+        self.var_status.set("Lendo a chave do CT-e no PDF...")
+        try:
+            chave = self._chave_do_dacte(caminho)
+        except Exception as erro:
+            self.var_status.set("Não foi possível ler a chave no PDF.")
+            self._log(f"ERRO no PDF {caminho.name}: {erro}")
+            messagebox.showerror("PDF", f"{erro}")
+            return
+        self._log(f"PDF lido: {caminho.name} · {self._rotulo_chave(chave)}")
+        if self.modo_entrada != "numero":
+            self._trocar_aba("numero")
+        self._entrada_por_chave(chave)
 
     def _procurar(self) -> None:
         if self._modo_varias():
@@ -1850,19 +2148,21 @@ class AppGNRE:
     def _emitir(self) -> None:
         if self.em_execucao:
             return
-        if self.modo_entrada == "chave":
+        if self.modo_entrada == "numero":
             pendentes = [item for item in self.chaves if not item.get("caminho")]
             if pendentes:
                 messagebox.showwarning(
                     "Aviso",
-                    f"{len(pendentes)} chave(s) ainda sem XML. Aguarde o download "
-                    "ou remova as chaves com erro antes de emitir.",
+                    f"{len(pendentes)} CT-e(s) ainda sem XML. Aguarde o download "
+                    "ou remova os CT-es com erro antes de emitir.",
                 )
                 return
         caminhos = self._caminhos_selecionados()
         if not caminhos:
-            if self.modo_entrada == "chave":
-                messagebox.showwarning("Aviso", "Adicione ao menos uma chave do CT-e.")
+            if self.modo_entrada == "numero":
+                messagebox.showwarning(
+                    "Aviso", "Informe ao menos um número de CT-e."
+                )
             else:
                 messagebox.showwarning("Aviso", "Selecione o XML do CT-e.")
             return
@@ -2013,8 +2313,8 @@ class AppGNRE:
         faltando = [caminho for caminho in caminhos if caminho not in self.arquivos_lidos]
         if faltando:
             dica = (
-                "Aguarde o download dos XMLs das chaves antes de emitir."
-                if self.modo_entrada == "chave"
+                "Aguarde o download dos XMLs dos CT-es antes de emitir."
+                if self.modo_entrada == "numero"
                 else "Clique em 'Ler e conferir' para validar o lote antes de emitir."
             )
             messagebox.showinfo("Leia os CT-es", dica)
@@ -2454,7 +2754,7 @@ class AppGNRE:
                         item["erro"] = None
                     self._definir_situacao(chave, "XML pronto", "pronto")
                     self._log(
-                        f"CT-e {self._formatar_chave(chave)} baixado: {caminho}"
+                        f"{self._rotulo_chave(chave)} baixado: {caminho}"
                     )
                     pendentes = [
                         outro
@@ -2475,11 +2775,21 @@ class AppGNRE:
                         item["erro"] = mensagem
                     self._definir_situacao(chave, "Erro — veja o Registro", "erro")
                     self._log(
-                        f"ERRO na chave {self._formatar_chave(chave)}: {mensagem}"
+                        f"ERRO no {self._rotulo_chave(chave)}: {mensagem}"
                     )
                     self.var_status.set(
                         "Não foi possível baixar um dos CT-es. Veja o Registro."
                     )
+                elif tipo == "numero_ok":
+                    numero, chave, caminho = dado
+                    self._chave_do_numero(numero, chave, caminho)
+                elif tipo == "numero_erro":
+                    numero, mensagem = dado
+                    self.var_status.set(f"CT-e nº {numero}: não localizado.")
+                    self._log(
+                        f"ERRO ao buscar o CT-e nº {numero} no Edocs: {mensagem}"
+                    )
+                    messagebox.showerror("CT-e não localizado", mensagem)
                 elif tipo == "atualizacao_consulta":
                     self._avaliar_atualizacao(dado)
                 elif tipo == "atualizacao_disponivel":
@@ -3189,6 +3499,181 @@ class DialogoCertificado(Janela):
         if cert.avisos:
             detalhe += "\n\nATENÇÃO:\n" + "\n".join(cert.avisos)
         messagebox.showinfo("Certificado atualizado", detalhe, parent=self.app.root)
+
+
+class DialogoEdocs(Janela):
+    """Conta do portal Edocs; a senha fica protegida pelo DPAPI do Windows."""
+
+    def __init__(self, master: tk.Tk, app: "AppGNRE"):
+        super().__init__(master)
+        self.app = app
+        self.title("Conta do portal Edocs")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+
+        self.conta_salva = carregar_conta(DADOS_DIR)
+        self.var_usuario = tk.StringVar(
+            value=(self.conta_salva or {}).get("usuario", "")
+        )
+        self.var_senha = tk.StringVar()
+        self.var_url = tk.StringVar(
+            value=(self.conta_salva or {}).get("url", EDOCS_URL)
+        )
+        self.var_mostrar = tk.BooleanVar(value=False)
+
+        self.configure(bg=CARTAO)
+        Quadro(self, bg=ACENTO, height=3).pack(fill="x", side="top")
+        moldura = ttk.Frame(self, padding=18)
+        moldura.pack(fill="both", expand=True)
+
+        ttk.Label(
+            moldura,
+            text="Conta do portal Edocs",
+            style="Secao.TLabel",
+            font=(app.fonte, 13, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            moldura,
+            text="Usada para baixar o XML do CT-e pelo número quando a SEFAZ não entrega.",
+            style="Legenda.TLabel",
+        ).pack(anchor="w", pady=(2, 12))
+
+        ttk.Label(moldura, text="ENDEREÇO DO PORTAL", style="Legenda.TLabel").pack(
+            anchor="w"
+        )
+        ttk.Entry(
+            moldura, textvariable=self.var_url, width=52, style="Campo.TEntry"
+        ).pack(fill="x", pady=(3, 0))
+
+        ttk.Label(moldura, text="USUÁRIO", style="Legenda.TLabel").pack(
+            anchor="w", pady=(12, 0)
+        )
+        self.entrada_usuario = ttk.Entry(
+            moldura, textvariable=self.var_usuario, width=32, style="Campo.TEntry"
+        )
+        self.entrada_usuario.pack(anchor="w", pady=(3, 0))
+
+        ttk.Label(moldura, text="SENHA", style="Legenda.TLabel").pack(
+            anchor="w", pady=(12, 0)
+        )
+        frame_senha = ttk.Frame(moldura)
+        frame_senha.pack(fill="x", pady=(3, 0))
+        self.entrada_senha = ttk.Entry(
+            frame_senha,
+            textvariable=self.var_senha,
+            show="*",
+            width=32,
+            style="Campo.TEntry",
+        )
+        self.entrada_senha.pack(side="left")
+        ttkb.Checkbutton(
+            frame_senha,
+            text="Mostrar",
+            variable=self.var_mostrar,
+            bootstyle="primary",
+            command=self._alternar_senha,
+        ).pack(side="left", padx=(10, 0))
+
+        nota = "A senha fica protegida pelo Windows (DPAPI), nunca em texto puro."
+        if self.conta_salva:
+            nota += " Em branco, mantém a senha já salva."
+        ttk.Label(moldura, text=nota, style="Legenda.TLabel").pack(
+            anchor="w", pady=(10, 0)
+        )
+
+        botoes = ttk.Frame(moldura)
+        botoes.pack(fill="x", pady=(16, 0))
+        ttkb.Button(
+            botoes,
+            text="Cancelar",
+            bootstyle="secondary",
+            command=self.destroy,
+        ).pack(side="right")
+        ttk.Button(
+            botoes,
+            text="Testar e salvar",
+            style="Acao.TButton",
+            command=self._salvar,
+        ).pack(side="right", padx=(0, 8))
+        if self.conta_salva:
+            ttkb.Button(
+                botoes,
+                text="Remover conta salva",
+                bootstyle="danger-outline",
+                command=self._remover,
+            ).pack(side="left")
+
+        self.bind("<Return>", lambda _evento: self._salvar())
+        self.bind("<Escape>", lambda _evento: self.destroy())
+        self.entrada_usuario.focus_set()
+
+        self.update_idletasks()
+        largura = self.winfo_width()
+        altura = self.winfo_height()
+        x = master.winfo_rootx() + max(0, (master.winfo_width() - largura) // 2)
+        y = master.winfo_rooty() + max(0, (master.winfo_height() - altura) // 3)
+        self.geometry(f"+{x}+{y}")
+
+    def _alternar_senha(self) -> None:
+        self.entrada_senha.configure(show="" if self.var_mostrar.get() else "*")
+
+    def _salvar(self) -> None:
+        usuario = self.var_usuario.get().strip()
+        url = self.var_url.get().strip() or EDOCS_URL
+        senha = self.var_senha.get() or (
+            (self.conta_salva or {}).get("senha") or ""
+        )
+        if not usuario:
+            messagebox.showwarning("Aviso", "Informe o usuário do Edocs.", parent=self)
+            return
+        if not senha:
+            messagebox.showwarning("Aviso", "Informe a senha do Edocs.", parent=self)
+            self.entrada_senha.focus_set()
+            return
+
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            with PortalEdocs(
+                {"url": url, "usuario": usuario, "senha": senha}
+            ) as portal:
+                empresa = portal.empresa
+        except Exception as erro:
+            messagebox.showerror("Edocs", str(erro), parent=self)
+            return
+        finally:
+            self.config(cursor="")
+
+        try:
+            salvar_conta(DADOS_DIR, usuario, senha, url)
+        except Exception as erro:
+            messagebox.showerror("Erro ao salvar", str(erro), parent=self)
+            return
+
+        self.destroy()
+        self.app._log(f"Conta do portal Edocs salva: {usuario} | {empresa}")
+        messagebox.showinfo(
+            "Conta salva",
+            f"Login confirmado no Edocs.\n\nEmpresa: {empresa}\n"
+            "A senha ficou protegida pelo Windows.",
+            parent=self.app.root,
+        )
+
+    def _remover(self) -> None:
+        if not messagebox.askyesno(
+            "Remover conta",
+            "Remover a conta do Edocs salva neste computador?",
+            parent=self,
+        ):
+            return
+        try:
+            remover_conta(DADOS_DIR)
+        except OSError as erro:
+            messagebox.showerror("Erro ao remover", str(erro), parent=self)
+            return
+        self.destroy()
+        self.app._log("Conta do portal Edocs removida.")
 
 
 def main() -> None:

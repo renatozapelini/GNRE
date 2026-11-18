@@ -138,6 +138,7 @@ class DistribuicaoCTe:
             "ult_nsu": int(dados.get("ult_nsu") or 0),
             "iniciado": bool(dados.get("iniciado")),
             "cancelados": set(str(item) for item in dados.get("cancelados") or []),
+            "eventos": [str(item) for item in dados.get("eventos") or []],
             "atualizado": dados.get("atualizado"),
         }
 
@@ -146,6 +147,7 @@ class DistribuicaoCTe:
             "ult_nsu": int(estado["ult_nsu"]),
             "iniciado": bool(estado["iniciado"]),
             "cancelados": sorted(estado["cancelados"]),
+            "eventos": estado["eventos"][-500:],
             "atualizado": datetime.now().isoformat(timespec="seconds"),
         }
         temporario = self.estado_path.with_suffix(".tmp")
@@ -284,6 +286,11 @@ class DistribuicaoCTe:
                 estado["cancelados"].add(chave)
                 continue
             if _achar(raiz, "infCte") is None:
+                # A SEFAZ manda eventos (MDF-e autorizado etc.) mesmo quando o
+                # XML do CT-e não é distribuído para o CNPJ; guardar a chave
+                # permite explicar o motivo na hora de buscar o documento.
+                if chave not in estado["eventos"]:
+                    estado["eventos"].append(chave)
                 continue
             destino = self.pasta / f"{chave}.xml"
             if not destino.exists():
@@ -403,6 +410,22 @@ class DistribuicaoCTe:
             return ""
         return momento.strftime("%d/%m/%Y %H:%M")
 
+    def _ultimo_xml_recebido(self) -> str:
+        """Data do CT-e mais recente que a distribuição já entregou."""
+        mais_novo = None
+        try:
+            for arquivo in self.pasta.glob("*.xml"):
+                if len(arquivo.stem) != 44 or not arquivo.stem.isdigit():
+                    continue
+                modificado = arquivo.stat().st_mtime
+                if mais_novo is None or modificado > mais_novo:
+                    mais_novo = modificado
+        except OSError:
+            return ""
+        if mais_novo is None:
+            return ""
+        return datetime.fromtimestamp(mais_novo).strftime("%d/%m/%Y %H:%M")
+
     def obter(self, chave: str) -> Path:
         validar_chave(chave)
         destino = self.pasta / f"{chave}.xml"
@@ -436,12 +459,25 @@ class DistribuicaoCTe:
             return destino
 
         ambiente = "produção" if self.ambiente == "1" else "homologação"
+        if chave in estado["eventos"]:
+            desde = self._ultimo_xml_recebido()
+            raise ErroDistribuicaoCTe(
+                f"CT-e {chave}: a SEFAZ em {ambiente} entregou apenas os eventos "
+                "deste documento (como o MDF-e autorizado), mas não liberou o XML "
+                "pela distribuição. Como os eventos chegaram, a SEFAZ reconhece o "
+                "CNPJ do certificado neste documento; a falta do XML é atraso ou "
+                "falha da própria distribuição"
+                f"{f' — nenhum XML de CT-e novo é entregue desde {desde}' if desde else ''}. "
+                "Tente novamente mais tarde. Se precisar emitir agora, peça o XML "
+                "à transportadora ou baixe no portal do CT-e com o certificado e "
+                "use a aba XML."
+            )
         mensagem = (
             f"CT-e {chave} não apareceu na distribuição em {ambiente}. "
             "A SEFAZ não entregou esse CT-e para o CNPJ do certificado: "
             "verifique se ele está autorizado (protocolo de autorização) e se "
-            "o CNPJ do certificado consta como destinatário. CT-es recém-emitidos "
-            "podem levar cerca de 1 hora para aparecer."
+            "o CNPJ do certificado consta como remetente ou destinatário. "
+            "CT-es recém-emitidos podem levar cerca de 1 hora para aparecer."
         )
         ultimo = self._ultimo_do_emitente(chave)
         if ultimo is not None:

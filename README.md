@@ -7,19 +7,26 @@ de pagamento e, quando a UF não usa o GNRE, aciona os portais estaduais
 
 ## Entrada do CT-e
 
-O cartão **CT-e autorizado** tem duas abas:
+O cartão **CT-e autorizado** tem três abas:
 
+- **Número do CT-e** (padrão) — informe o número e clique em **Adicionar**.
+  O programa localiza o CT-e no portal Edocs, baixa o XML autorizado e já
+  preenche os dados da guia. Vários números podem ser adicionados para gerar
+  o lote (mesma UF). Se a busca pelo número falhar, ele tenta a Distribuição
+  DF-e; a chave de 44 dígitos também é aceita neste campo.
 - **XML** — seleciona o arquivo autorizado do computador.
-- **Chave do CT-e** — informe a chave de 44 dígitos e clique em **Adicionar**.
-  O programa consulta a Distribuição DF-e do CT-e com o certificado A1,
-  baixa o XML autorizado, confere cancelamento e já preenche os dados da guia.
-  Várias chaves podem ser adicionadas para gerar o lote (mesma UF).
+- **PDF** — seleciona o DACTE; a chave do CT-e é lida do PDF, o XML é baixado
+  e os dados da guia são preenchidos.
+
+O portal Edocs é configurado no menu em **Conta do portal Edocs** (endereço,
+usuário e senha de cada operador). A senha fica protegida pelo DPAPI do
+Windows em `Documentos\ConfGNRE\edocs.json`, nunca em texto puro.
 
 Os XMLs baixados ficam em `Documentos\ConfGNRE\xmls`, junto do ponto de
-parada da consulta. A consulta usa a janela mais recente da distribuição
-(por causa do limite de requisições da SEFAZ); para CT-es mais antigos,
-use a aba **XML**. Se a SEFAZ limitar as consultas (consumo indevido), o
-programa avisa e reaproveita os XMLs já baixados.
+parada da consulta. Para CT-es antigos que não aparecem na distribuição,
+basta o número do CT-e: o Edocs entrega o XML. Se a SEFAZ limitar as
+consultas (consumo indevido), o programa avisa e reaproveita os XMLs já
+baixados.
 
 ## Instalação
 
@@ -64,6 +71,7 @@ presente, atualiza somente o executável.
 - `app.py` — interface e fluxo de emissão
 - `gnre_api.py` — cliente SOAP/mTLS do GNRE 2.00, regras por UF e PDF oficial
 - `consulta_cte.py` — distribuição DF-e do CT-e (busca o XML pela chave)
+- `edocs.py` — portal Edocs (conta protegida, busca por número e download do XML)
 - `leitor_cte.py` — leitura e validação do XML do CT-e
 - `validacao_pdf.py` — conferência do PDF contra o retorno oficial
 - `atualizador.py` — verificação e instalação de novas versões pelo GitHub
