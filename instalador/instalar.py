@@ -10,9 +10,9 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
-VERSAO = "3.2.2"
+VERSAO = "3.2.3"
 ATALHO = "Emissor de Guias"
 ATALHOS_ANTIGOS = ("Emissor GNRE",)
 PASTA_PROGRAMA = "GNRE"
@@ -622,6 +622,146 @@ class Instalador:
             messagebox.showerror("Erro", str(erro), parent=self.root)
 
 
+def _argumento(nome: str, padrao: str = "") -> str:
+    try:
+        indice = sys.argv.index(nome)
+    except ValueError:
+        return padrao
+    if indice + 1 < len(sys.argv):
+        return sys.argv[indice + 1]
+    return padrao
+
+
+def _aguardar_processo(pid: int, limite: float = 180.0) -> None:
+    """Espera o programa em uso terminar; o GNRE.exe fica travado até sair."""
+    if pid <= 0:
+        return
+    try:
+        import ctypes
+
+        SYNCHRONIZE = 0x00100000
+        alca = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if not alca:
+            return
+        try:
+            ctypes.windll.kernel32.WaitForSingleObject(alca, int(limite * 1000))
+        finally:
+            ctypes.windll.kernel32.CloseHandle(alca)
+    except OSError:
+        pass
+
+
+def _atualizacao_silenciosa() -> int:
+    """Atualização disparada pelo próprio programa.
+
+    Espera o programa antigo fechar, aplica a versão e reabre o programa.
+    A janela de progresso e a caixa de erro existem para que uma falha nunca
+    termine sem aviso, como acontecia quando o auxiliar não iniciava.
+    """
+    log = Path(os.environ.get("TEMP", ".")) / "atualizar_gnre.log"
+    pid = int(_argumento("--aguardar-pid", "0") or 0)
+    alvo = Path(_argumento("--reabrir") or (pasta_programa() / "GNRE.exe"))
+
+    root = tk.Tk()
+    root.title("Atualização do Emissor de Guias")
+    root.configure(bg=FUNDO)
+    root.resizable(False, False)
+    try:
+        root.iconphoto(True, tk.PhotoImage(file=str(_origem("gnre.png"))))
+    except Exception:
+        pass
+    tk.Label(
+        root,
+        text="Aplicando a atualização...",
+        bg=FUNDO,
+        fg=TEXTO,
+        font=("Segoe UI", 11, "bold"),
+    ).pack(padx=26, pady=(18, 6))
+    barra = ttk.Progressbar(root, mode="indeterminate", length=300)
+    barra.pack(padx=26, pady=(0, 10))
+    barra.start(12)
+    detalhe = tk.Label(
+        root,
+        text="O programa reabre sozinho no fim.",
+        bg=FUNDO,
+        fg=SUAVE,
+        font=("Segoe UI", 8),
+    )
+    detalhe.pack(padx=26, pady=(0, 16))
+    root.update_idletasks()
+    largura, altura = root.winfo_reqwidth(), root.winfo_reqheight()
+    root.geometry(
+        f"{largura}x{altura}"
+        f"+{(root.winfo_screenwidth() - largura) // 2}"
+        f"+{(root.winfo_screenheight() - altura) // 2}"
+    )
+
+    fila: queue.Queue = queue.Queue()
+    estado = {"codigo": 0}
+
+    def tarefa() -> None:
+        if pid:
+            fila.put(("aviso", "Aguardando o programa fechar..."))
+            _aguardar_processo(pid)
+        fila.put(("aviso", "Copiando os arquivos da nova versão..."))
+        linhas: list[str] = []
+        try:
+            resultado = instalar(True, linhas.append)
+        except Exception as erro:
+            fila.put(("erro", (erro, linhas)))
+        else:
+            fila.put(("ok", (resultado, linhas)))
+
+    threading.Thread(target=tarefa, daemon=True).start()
+
+    def processar() -> None:
+        try:
+            while True:
+                tipo, dado = fila.get_nowait()
+                if tipo == "aviso":
+                    detalhe.configure(text=dado)
+                elif tipo == "ok":
+                    resultado, linhas = dado
+                    log.write_text(
+                        "\n".join(linhas) + f"\nprograma={resultado['programa']}\n",
+                        encoding="utf-8",
+                    )
+                    barra.stop()
+                    root.destroy()
+                    return
+                else:
+                    erro, linhas = dado
+                    estado["codigo"] = 1
+                    barra.stop()
+                    log.write_text(
+                        "\n".join(linhas) + f"\nERRO: {erro}\n", encoding="utf-8"
+                    )
+                    root.withdraw()
+                    messagebox.showerror(
+                        "Atualização não concluída",
+                        "A atualização não foi aplicada.\n\n"
+                        f"{erro}\n\nO programa será reaberto na versão atual.\n"
+                        f"Detalhes: {log}",
+                        parent=root,
+                    )
+                    root.destroy()
+                    return
+        except queue.Empty:
+            pass
+        root.after(80, processar)
+
+    root.after(80, processar)
+    root.mainloop()
+
+    programa = alvo if alvo.exists() else pasta_programa() / "GNRE.exe"
+    if programa.exists():
+        try:
+            os.startfile(str(programa))
+        except OSError:
+            pass
+    return estado["codigo"]
+
+
 def principal() -> None:
     try:
         import ctypes
@@ -631,20 +771,7 @@ def principal() -> None:
         pass
 
     if "--silencioso" in sys.argv:
-        registro = os.environ.get("TEMP", ".")
-        log = Path(registro) / "instalar_gnre.log"
-        linhas = []
-        try:
-            resultado = instalar(True, linhas.append)
-            codigo = 0
-            linhas.append(f"programa={resultado['programa']}")
-            linhas.append(f"config={resultado['config']}")
-            linhas.append(f"atalhos={resultado['atalhos']}")
-        except Exception as erro:
-            codigo = 1
-            linhas.append(f"ERRO: {erro}")
-        log.write_text("\n".join(linhas) + "\n", encoding="utf-8")
-        sys.exit(codigo)
+        sys.exit(_atualizacao_silenciosa())
 
     root = tk.Tk()
     Instalador(root)

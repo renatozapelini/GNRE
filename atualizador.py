@@ -1,8 +1,9 @@
 """Atualização interna do aplicativo pelo GitHub.
 
 Confere a última release do repositório público, compara a versão com a do
-programa, baixa o GNRE.exe e troca o executável em uso. A configuração em
-Documentos\\ConfGNRE fica intacta: a troca atinge somente o .exe.
+programa e baixa o instalador completo (o GNRE.exe sozinho não basta na versão
+em pasta). O instalador recebe o PID do programa em uso, espera ele fechar e
+aplica a versão. A configuração em Documentos\\ConfGNRE fica intacta.
 """
 
 from __future__ import annotations
@@ -148,7 +149,8 @@ def baixar(
         raise ErroAtualizacao("A release não informou o endereço do executável.")
     pasta = Path(tempfile.gettempdir()) / "GNRE-atualizacao"
     pasta.mkdir(parents=True, exist_ok=True)
-    destino = destino or pasta / f"GNRE-{atualizacao.versao}.exe"
+    prefixo = "Instalar-GNRE" if atualizacao.tipo == "instalador" else "GNRE"
+    destino = destino or pasta / f"{prefixo}-{atualizacao.versao}.exe"
     parcial = destino.with_name(destino.name + ".parcial")
 
     recebido = 0
@@ -188,89 +190,54 @@ def _pasta_programa() -> Path:
 
 
 def instalar(
-    novo_exe: Path,
-    destino: Path | None = None,
+    novo_instalador: Path,
     reiniciar: bool = True,
-    tipo: str = "exe",
+    tipo: str = "instalador",
 ) -> Path:
-    """Agenda a troca do programa em uso e devolve o script auxiliar criado.
+    """Inicia o instalador baixado; ele espera este programa fechar e aplica a versão.
 
-    O Windows não deixa sobrescrever um .exe em execução, então um script
-    destacado espera este processo terminar, aplica a atualização e reabre o
-    programa. A pasta ConfGNRE não é tocada.
-
-    tipo="instalador": roda o instalador completo em modo silencioso (leva
-    também bibliotecas e arquivos de dados novos) e abre a cópia instalada.
-    tipo="exe": troca somente o executável atual.
+    O auxiliar em PowerShell não chegava a rodar em algumas máquinas: o programa
+    fechava, o script ficava no TEMP e nada era instalado. Agora o próprio
+    instalador recebe o PID do programa, mostra o progresso, troca os arquivos
+    e reabre o programa; qualquer falha aparece em uma caixa de erro.
     """
     if not getattr(sys, "frozen", False):
         raise ErroAtualizacao(
             "A troca automática só funciona no GNRE.exe; no código-fonte baixe a release manualmente."
         )
-    novo_exe = Path(novo_exe).resolve()
-    if not novo_exe.is_file():
-        raise ErroAtualizacao("O arquivo baixado não foi encontrado.")
+    if tipo != "instalador":
+        raise ErroAtualizacao(
+            "Esta release não traz o Instalar GNRE.exe. Baixe o instalador da "
+            "release e rode manualmente; a troca só do executável não atualiza "
+            "as bibliotecas do programa."
+        )
+    novo_instalador = Path(novo_instalador).resolve()
+    if not novo_instalador.is_file():
+        raise ErroAtualizacao("O instalador baixado não foi encontrado.")
 
-    if tipo == "instalador":
-        alvo = (_pasta_programa() / "GNRE.exe").resolve()
-        abertura = (
-            f"Start-Process -FilePath '{_ps(alvo)}' -WorkingDirectory '{_ps(alvo.parent)}'"
-            if reiniciar
-            else "Write-Output 'Atualizado.'"
-        )
-        aplicacao = (
-            f"Start-Process -FilePath '{_ps(novo_exe)}' "
-            f"-ArgumentList '--silencioso' -Wait\n"
-            f"if (-not (Test-Path -LiteralPath '{_ps(alvo)}')) "
-            "{ throw 'O instalador não gravou o programa.' }"
-        )
-    else:
-        alvo = Path(destino or sys.executable).resolve()
-        if novo_exe == alvo:
-            raise ErroAtualizacao("O arquivo baixado já é o programa em execução.")
-        abertura = (
-            f"Start-Process -FilePath '{_ps(alvo)}' "
-            f"-WorkingDirectory '{_ps(alvo.parent)}'"
-            if reiniciar
-            else "Write-Output 'Atualizado.'"
-        )
-        aplicacao = f"Copy-Item -LiteralPath '{_ps(novo_exe)}' -Destination '{_ps(alvo)}' -Force"
-
-    script = Path(tempfile.gettempdir()) / "atualizar_gnre.ps1"
-    conteudo = f"""$ErrorActionPreference = 'Stop'
-for ($i = 0; $i -lt 480; $i++) {{
-    if (-not (Get-Process -Id {os.getpid()} -ErrorAction SilentlyContinue)) {{ break }}
-    Start-Sleep -Milliseconds 500
-}}
-Start-Sleep -Milliseconds 700
-{aplicacao}
-{abertura}
-Remove-Item -LiteralPath '{_ps(novo_exe)}' -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
-"""
-    script.write_text(conteudo, encoding="utf-8-sig")
+    alvo = _pasta_programa() / "GNRE.exe"
     comando = [
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-File",
-        str(script),
+        str(novo_instalador),
+        "--silencioso",
+        "--aguardar-pid",
+        str(os.getpid()),
     ]
-    criacao = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen(
-        comando,
-        creationflags=criacao,
-        close_fds=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return script
-
-
-def _ps(caminho: Path) -> str:
-    """Escapa um caminho para uso entre aspas simples no PowerShell."""
-    return str(caminho).replace("'", "''")
+    if reiniciar:
+        comando += ["--reabrir", str(alvo)]
+    ambiente = {
+        chave: valor
+        for chave, valor in os.environ.items()
+        if not chave.upper().startswith("_PYI_")
+    }
+    try:
+        subprocess.Popen(
+            comando,
+            env=ambiente,
+            close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as erro:
+        raise ErroAtualizacao(f"Não foi possível iniciar o instalador: {erro}") from erro
+    return novo_instalador

@@ -1201,7 +1201,7 @@ class AppGNRE:
             self._log(f"Atualização v{info.versao} baixada; aplicação adiada.")
             return
         try:
-            script = instalar(caminho, tipo=info.tipo)
+            instalador = instalar(caminho, tipo=info.tipo)
         except ErroAtualizacao as erro:
             self.var_status.set("Falha ao preparar a atualização.")
             self._log(f"ERRO na atualização: {erro}")
@@ -1209,7 +1209,7 @@ class AppGNRE:
             return
         self.var_status.set(f"Instalando a versão {info.versao}...")
         self._log(
-            f"Atualização: aplicando v{info.versao} ({script.name}). "
+            f"Atualização: aplicando v{info.versao} ({instalador.name}). "
             "O programa vai fechar e reabrir já atualizado."
         )
         self.root.after(700, self.root.destroy)
