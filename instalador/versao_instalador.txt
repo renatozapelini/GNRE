@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(3, 2, 4, 0),
-    prodvers=(3, 2, 4, 0),
+    filevers=(3, 2, 5, 0),
+    prodvers=(3, 2, 5, 0),
     mask=0x3F,
     flags=0x0,
     OS=0x40004,
@@ -17,12 +17,12 @@ VSVersionInfo(
           [
             StringStruct("CompanyName", "TRANSREIS TRANSPORTE LTDA"),
             StringStruct("FileDescription", "Instalador do Emissor de Guias (programa, configuracao e atalhos)"),
-            StringStruct("FileVersion", "3.2.4.0"),
+            StringStruct("FileVersion", "3.2.5.0"),
             StringStruct("InternalName", "Instalar GNRE"),
             StringStruct("LegalCopyright", "TRANSREIS TRANSPORTE LTDA"),
             StringStruct("OriginalFilename", "Instalar GNRE.exe"),
             StringStruct("ProductName", "Instalador - Emissor de Guias"),
-            StringStruct("ProductVersion", "3.2.4.0"),
+            StringStruct("ProductVersion", "3.2.5.0"),
           ],
         )
       ]

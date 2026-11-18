@@ -369,6 +369,40 @@ class DistribuicaoCTe:
             "parcial": parcial,
         }
 
+    def _ultimo_do_emitente(self, chave: str) -> tuple[str, str] | None:
+        """Maior CT-e do mesmo emitente/modelo/série já entregue pela SEFAZ."""
+        if len(chave) != 44:
+            return None
+        emitente = chave[6:20]
+        modelo_serie = chave[20:25]
+        ultimo = ""
+        for arquivo in self.pasta.glob("*.xml"):
+            outra = arquivo.stem
+            if len(outra) != 44 or not outra.isdigit():
+                continue
+            if outra[6:20] != emitente or outra[20:25] != modelo_serie:
+                continue
+            numero = outra[25:34]
+            if numero.isdigit() and (not ultimo or int(numero) > int(ultimo[25:34])):
+                ultimo = outra
+        if not ultimo:
+            return None
+        data = ""
+        try:
+            raiz = ET.fromstring((self.pasta / f"{ultimo}.xml").read_bytes())
+            data = _texto(raiz, "dhRecbto") or _texto(raiz, "dhEmi")
+        except (OSError, ET.ParseError):
+            pass
+        return ultimo[25:34].lstrip("0") or "0", data
+
+    @staticmethod
+    def _formatar_data(texto: str) -> str:
+        try:
+            momento = datetime.fromisoformat(texto)
+        except (TypeError, ValueError):
+            return ""
+        return momento.strftime("%d/%m/%Y %H:%M")
+
     def obter(self, chave: str) -> Path:
         validar_chave(chave)
         destino = self.pasta / f"{chave}.xml"
@@ -402,9 +436,20 @@ class DistribuicaoCTe:
             return destino
 
         ambiente = "produção" if self.ambiente == "1" else "homologação"
-        raise ErroDistribuicaoCTe(
+        mensagem = (
             f"CT-e {chave} não apareceu na distribuição em {ambiente}. "
-            "Confira a chave, o ambiente e se o certificado participa do "
-            "transporte. CT-es com mais de alguns dias podem já estar fora "
-            "da janela consultada; nesse caso selecione o XML na aba XML."
+            "A SEFAZ não entregou esse CT-e para o CNPJ do certificado: "
+            "verifique se ele está autorizado (protocolo de autorização) e se "
+            "o CNPJ do certificado consta como destinatário. CT-es recém-emitidos "
+            "podem levar cerca de 1 hora para aparecer."
         )
+        ultimo = self._ultimo_do_emitente(chave)
+        if ultimo is not None:
+            numero, data = ultimo
+            quando = self._formatar_data(data)
+            mensagem += (
+                f" Último CT-e deste emitente que a distribuição entregou: "
+                f"nº {numero}{f', autorizado em {quando}' if quando else ''}."
+            )
+        mensagem += " Se o XML já estiver em mãos, use a aba XML."
+        raise ErroDistribuicaoCTe(mensagem)
