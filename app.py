@@ -316,6 +316,7 @@ class AppGNRE:
         self.var_chave = tk.StringVar()
         self.var_modo = tk.StringVar(value="unica")
         self.var_uf = tk.StringVar()
+        self.var_valor = tk.StringVar()
         self.var_vencimento = tk.StringVar(value=vencimento_padrao().strftime("%d/%m/%Y"))
         self.var_pagamento = tk.StringVar(value=date.today().strftime("%d/%m/%Y"))
         self.var_ambiente = tk.StringVar(value="2")
@@ -495,8 +496,9 @@ class AppGNRE:
         grade = Quadro(cartao_dados, bg=CARTAO)
         grade.pack(fill="x")
         self.entrada_uf = self._campo(grade, 0, "UF favorecida", self.var_uf, 8)
-        self._campo(grade, 1, "Vencimento", self.var_vencimento, 13)
-        self._campo(grade, 2, "Pagamento", self.var_pagamento, 13)
+        self._campo(grade, 1, "Valor da guia", self.var_valor, 16)
+        self._campo(grade, 2, "Vencimento", self.var_vencimento, 13)
+        self._campo(grade, 3, "Pagamento", self.var_pagamento, 13)
 
         linha_acao = Quadro(cartao_dados, bg=CARTAO)
         linha_acao.pack(fill="x", pady=(9, 0))
@@ -637,7 +639,7 @@ class AppGNRE:
 
     def _ajustar_janela(self) -> None:
         self.root.configure(bg=FUNDO)
-        self.root.title(NOME)
+        self.root.title(f"{NOME} v{VERSAO}")
         try:
             self.root.iconbitmap(str(ICONE_PATH))
             self.root.iconbitmap(default=str(ICONE_PATH))
@@ -867,7 +869,7 @@ class AppGNRE:
 
         Rotulo(
             linha,
-            text="GNRE 2.00",
+            text=f"GNRE 2.00 · v{VERSAO}",
             bg=FUNDO,
             fg=TEXTO_SUAVE,
             font=(self.fonte, 7),
@@ -1427,6 +1429,7 @@ class AppGNRE:
         self.resultado = None
         self.pdf_path = None
         self.var_uf.set("")
+        self.var_valor.set("")
         self.var_vencimento.set(vencimento_padrao().strftime("%d/%m/%Y"))
         self.var_pagamento.set(date.today().strftime("%d/%m/%Y"))
         self.entrada_uf.configure(state="readonly")
@@ -1459,6 +1462,21 @@ class AppGNRE:
     def _formatar_chave(chave: str) -> str:
         return " ".join(chave[i : i + 4] for i in range(0, len(chave), 4))
 
+    @staticmethod
+    def _moeda(valor: float) -> str:
+        texto = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {texto}"
+
+    def _rotulo_valor(self, lidos: dict[str, DadosCTe]) -> str:
+        valores = [dados.valor_icms for dados in lidos.values() if dados.valor_icms > 0]
+        if not valores:
+            return ""
+        distintos = {round(valor, 2) for valor in valores}
+        if len(distintos) == 1:
+            texto = self._moeda(valores[0])
+            return f"{texto} cada" if len(valores) > 1 else texto
+        return f"{self._moeda(sum(valores))} total"
+
     def _resetar_selecao(self) -> None:
         self.entrada_arquivo.configure(state="normal")
         self.arquivos = []
@@ -1469,6 +1487,7 @@ class AppGNRE:
         self.pdf_path = None
         self.var_arquivo.set("")
         self.var_uf.set("")
+        self.var_valor.set("")
         self.var_vencimento.set(vencimento_padrao().strftime("%d/%m/%Y"))
         self.var_pagamento.set(date.today().strftime("%d/%m/%Y"))
         self.entrada_uf.configure(state="readonly")
@@ -1687,6 +1706,7 @@ class AppGNRE:
         self.dados = None
         self.arquivo_lido = None
         self.var_uf.set("")
+        self.var_valor.set("")
         self._atualizar_selecao()
 
         lidos: dict[str, DadosCTe] = {}
@@ -1737,6 +1757,7 @@ class AppGNRE:
         self.arquivo_lido, self.dados = next(iter(lidos.items()))
         uf_comum = next(iter(ufs), "")
         self.var_uf.set(uf_comum)
+        self.var_valor.set(self._rotulo_valor(lidos))
         venc = vencimento_padrao(uf_comum or None)
         self.var_vencimento.set(venc.strftime("%d/%m/%Y"))
         self.var_pagamento.set(date.today().strftime("%d/%m/%Y"))
