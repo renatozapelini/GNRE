@@ -1471,7 +1471,8 @@ class AppGNRE:
         """Acrescenta ao regras_uf.json do usuário as UFs que vieram no pacote.
 
         As regras do usuário são preservadas; só entram UFs que ainda não
-        existem no arquivo dele.
+        existem no arquivo dele. UFs com ``revisao`` mais nova no pacote são
+        substituídas (correções de regra, como o documento de origem do RJ).
         """
         if caminho is None:
             return
@@ -1487,9 +1488,21 @@ class AppGNRE:
         except (OSError, ValueError):
             return
         faltando = {uf: regra for uf, regra in novos.items() if uf not in atuais}
-        if not faltando:
+        corrigidas: dict[str, dict] = {}
+        for uf, regra in novos.items():
+            if uf in faltando:
+                continue
+            try:
+                revisao_nova = int(regra.get("revisao") or 0)
+                revisao_atual = int((atuais.get(uf) or {}).get("revisao") or 0)
+            except (TypeError, ValueError):
+                continue
+            if revisao_nova > revisao_atual:
+                corrigidas[uf] = regra
+        if not faltando and not corrigidas:
             return
         atuais.update(faltando)
+        atuais.update(corrigidas)
         temporario = caminho.with_suffix(".tmp")
         try:
             temporario.write_text(
@@ -1503,7 +1516,12 @@ class AppGNRE:
             except OSError:
                 pass
             return
-        self._log("Regras locais atualizadas: " + ", ".join(sorted(faltando)))
+        if faltando:
+            self._log("Regras locais atualizadas: " + ", ".join(sorted(faltando)))
+        if corrigidas:
+            self._log(
+                "Regras locais corrigidas: " + ", ".join(sorted(corrigidas))
+            )
 
     def _carregar_contexto(self) -> None:
         try:

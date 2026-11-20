@@ -404,15 +404,20 @@ def montar_regras(
         raise ErroGNRE(f"Configuração online da UF {uf} não contém a receita {receita}.")
 
     exige_documento = live_receita.get("exige_documento_origem")
+    aceitos = list(live_receita.get("tipos_documento") or [])
+    if not aceitos:
+        # Algumas UFs não listam os tipos de documento no configuf; nesse caso
+        # vale a definição local (RJ usa o tipo 21, "Conhecimento de Transporte").
+        locais_tipos = list(fallback.get("tipos_documento") or [])
+        if locais_tipos:
+            aceitos = locais_tipos
+            exige_documento = bool(fallback.get("exige_documento_origem", True))
     if exige_documento is None:
         exige_documento = bool(fallback.get("exige_documento_origem", True))
 
-    aceitos = list(live_receita.get("tipos_documento") or fallback.get("tipos_documento") or [])
     padrao_documento = False
     documento_tipo = ""
     if not exige_documento:
-        # UF como o RJ: a receita não usa documento de origem; enviar o campo
-        # (mesmo no tipo do CT-e) é rejeitado com o erro 217.
         aceitos = []
     else:
         if not aceitos:
