@@ -117,6 +117,17 @@ def _cep(valor: object) -> str:
     return str(valor or "")
 
 
+def _documento_origem(guia: dict) -> str:
+    """O portal imprime o número do documento, não a chave, nos tipos 22/23."""
+    valor = str(guia.get("documento_origem") or "").strip()
+    tipo = str(guia.get("documento_tipo") or "").strip()
+    if tipo in {"22", "23"}:
+        digitos = re.sub(r"\D", "", valor)
+        if len(digitos) == 44:
+            return digitos[25:34]
+    return valor
+
+
 def _linha_digitavel(valor: object) -> str:
     digitos = re.sub(r"\D", "", str(valor or ""))
     if len(digitos) == 48:
@@ -287,7 +298,7 @@ def _desenhar_via(c: canvas.Canvas, guia: dict, dy: float, via: str,
         ("Nº de Controle", 48.08, 56.92, str(guia.get("numero") or ""), 555.0),
         ("Data de Vencimento", 66.08, 74.92, _data(guia.get("data_vencimento")), 555.0),
         ("Nº Documento de Origem", 84.08, 92.92,
-         str(guia.get("documento_origem") or ""), 555.0),
+         _documento_origem(guia), 555.0),
     ]
     for rotulo, y_rotulo, y_valor, valor_campo, x in linhas_direita:
         _rotulo(c, 410, y_rotulo + dy, rotulo)
@@ -295,6 +306,8 @@ def _desenhar_via(c: canvas.Canvas, guia: dict, dy: float, via: str,
 
     _rotulo(c, 410, 102.08 + dy, "Período de Referência")
     _rotulo(c, 505, 102.08 + dy, "Parcela")
+    _texto(c, 498, 110.92 + dy,
+           str(guia.get("periodo_referencia") or ""), NORMAL, 7, "right")
 
     valores_direita = [
         ("Valor Principal", 120.08, 128.92, valor),
@@ -331,6 +344,8 @@ def _desenhar_via(c: canvas.Canvas, guia: dict, dy: float, via: str,
     _rotulo(c, 35, y_cep + dy, "CEP:")
     _texto(c, 74, 91.92 + dy, _cep(emitente.get("cep")))
     _rotulo(c, 305.33, 91.58 + dy, "Telefone:")
+    _texto(c, 337.0 if segunda else 335.0, 91.92 + dy,
+           str(emitente.get("telefone") or ""))
 
     # Destinatário / fiscalização (sem dados na GNRE de ICMS Outra UF)
     _texto(c, 220, 102.08 + dy, "Dados do Destinatário", NEGRITO, 6, "center")
@@ -341,8 +356,14 @@ def _desenhar_via(c: canvas.Canvas, guia: dict, dy: float, via: str,
     _rotulo(c, 35, 146.58 + dy, "Produto:")
 
     _rotulo(c, 35, 166.08 + dy, "Informações Complementares:")
-    _texto(c, 36, 174.50 + dy,
-           _ajustar(str(guia.get("informacoes") or ""), NORMAL, 7, 370))
+    linhas_info = list(guia.get("informacoes_linhas") or [])
+    if not linhas_info:
+        linhas_info = [
+            parte for parte in str(guia.get("informacoes") or "").split(" | ") if parte
+        ]
+    for indice, linha in enumerate(linhas_info[:3]):
+        _texto(c, 36, 174.50 + dy + indice * 8.15,
+               _ajustar(linha, NORMAL, 7, 370))
 
     _texto(c, 35, 201.92 + dy, "Documento Válido para pagamento", NEGRITO, 7)
     _texto(c, 185, 201.92 + dy,

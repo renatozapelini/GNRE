@@ -1270,14 +1270,19 @@ def analisar_resultado(xml_bytes: bytes) -> dict:
         emitente = _find(no_guia, "contribuinteEmitente")
         item = _find(_find(no_guia, "itensGNRE"), "item")
         documento = _find(item, "documentoOrigem")
-        informacoes = " | ".join(
+        referencia = _find(item, "referencia")
+        mes = _texto(referencia, "mes").strip()
+        ano = _texto(referencia, "ano").strip()
+        periodo = f"{mes.zfill(2)}/{ano}" if mes and ano else ""
+        informacoes_linhas = [
             texto
             for texto in (
                 _texto(no_info, "informacao")
                 for no_info in _findall(_find(no_guia, "informacoesComplementares"), "informacao")
             )
             if texto
-        )
+        ]
+        informacoes = " | ".join(informacoes_linhas)
         guias.append(
             {
                 "codigo": codigo_guia,
@@ -1296,14 +1301,17 @@ def analisar_resultado(xml_bytes: bytes) -> dict:
                     "municipio": _texto(emitente, "municipio"),
                     "uf": _texto(emitente, "uf"),
                     "cep": _texto(emitente, "cep"),
+                    "telefone": _texto(emitente, "telefone"),
                 },
                 "receita": _texto(item, "receita"),
                 "documento_origem": _texto(item, "documentoOrigem"),
                 "documento_tipo": documento.get("tipo", "") if documento is not None else "",
+                "periodo_referencia": periodo,
                 "data_vencimento": _texto(item, "dataVencimento"),
                 "data_pagamento": _texto(no_guia, "dataPagamento"),
                 "data_limite_pagamento": _texto(no_guia, "dataLimitePagamento"),
                 "informacoes": informacoes,
+                "informacoes_linhas": informacoes_linhas,
                 "qrcode": _texto(no_guia, "qrcodePayload"),
             }
         )

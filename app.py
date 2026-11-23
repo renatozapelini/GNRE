@@ -3360,25 +3360,29 @@ class AppGNRE:
         candidato = pasta / nome
         if origem.resolve().parent == pasta.resolve() and origem.name == nome:
             destino = origem
-        elif candidato.exists():
-            destino = candidato
-            try:
-                shutil.copy2(origem, candidato)
-            except OSError as erro:
-                self._log(
-                    f"AVISO: não foi possível atualizar {candidato} ({erro}); "
-                    f"entregando {origem}."
-                )
-                destino = origem
         else:
-            destino = self._destino_livre(pasta, nome)
-            try:
-                shutil.copy2(origem, destino)
-            except OSError as erro:
-                self._log(
-                    f"AVISO: não foi possível copiar o PDF ({erro}); entregando {origem}."
-                )
-                destino = origem
+            destino = None
+            if candidato.exists():
+                try:
+                    shutil.copy2(origem, candidato)
+                    destino = candidato
+                except OSError as erro:
+                    # Guia aberta no leitor de PDF: usa um nome amigável livre
+                    # em vez de expor o nome técnico com a chave do CT-e.
+                    self._log(
+                        f"AVISO: não foi possível atualizar {candidato.name} "
+                        f"({erro}); salvando a guia com outro nome."
+                    )
+            if destino is None:
+                destino = self._destino_livre(pasta, nome)
+                try:
+                    shutil.copy2(origem, destino)
+                except OSError as erro:
+                    self._log(
+                        f"AVISO: não foi possível copiar o PDF ({erro}); "
+                        f"entregando {origem}."
+                    )
+                    destino = origem
         resultado.pdf_path = destino
         self.pdf_path = destino
         self._log(f"Guia pronta para pagamento: {destino}")
